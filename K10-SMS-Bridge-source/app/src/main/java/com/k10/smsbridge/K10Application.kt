@@ -10,6 +10,7 @@ import com.k10.smsbridge.data.AppDatabase
 import com.k10.smsbridge.rules.RuleStore
 import com.k10.smsbridge.security.SecureTokenStore
 import com.k10.smsbridge.sync.SyncWorker
+import com.k10.smsbridge.voice.TransactionAnnouncer
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
 import java.util.concurrent.TimeUnit
@@ -33,11 +34,13 @@ object Graph {
     lateinit var database: AppDatabase
     lateinit var rules: RuleStore
     lateinit var tokenStore: SecureTokenStore
+    lateinit var announcer: TransactionAnnouncer
     val appScope = CoroutineScope(SupervisorJob())
 
     fun init(app: Application) {
         database = AppDatabase.create(app)
         rules = RuleStore(app)
         tokenStore = SecureTokenStore(app)
+        announcer = TransactionAnnouncer(app)
     }
 }
