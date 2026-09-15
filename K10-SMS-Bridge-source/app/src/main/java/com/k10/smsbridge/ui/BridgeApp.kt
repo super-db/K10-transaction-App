@@ -236,7 +236,7 @@ private fun SearchSmsScreen(vm: BridgeViewModel, back: () -> Unit) {
     var to by remember { mutableStateOf(LocalDate.now().toString()) }
     var sender by remember { mutableStateOf("") }
     var account by remember { mutableStateOf(vm.rules().accountLast4) }
-    var credit by remember { mutableStateOf("received") }
+    var credit by remember { mutableStateOf("received, credited") }
     var rawText by remember { mutableStateOf("") }
     var eligibleOnly by remember { mutableStateOf(true) }
     val today = LocalDate.now()
@@ -256,9 +256,9 @@ private fun SearchSmsScreen(vm: BridgeViewModel, back: () -> Unit) {
                 Field(from, { from = it }, "Date From (YYYY-MM-DD)", Modifier.weight(1f))
                 Field(to, { to = it }, "Date To (YYYY-MM-DD)", Modifier.weight(1f))
             }
-            Field(sender, { sender = it }, "Sender")
+            Field(sender, { sender = it }, "Sender (optional)")
             Field(account, { account = it.filter(Char::isDigit).take(4) }, "Account last4")
-            Field(credit, { credit = it }, "Credit keyword")
+            Field(credit, { credit = it }, "Credit keywords (comma-separated, any match)")
             Field(rawText, { rawText = it }, "Advanced local search text")
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Checkbox(eligibleOnly, { eligibleOnly = it })
@@ -277,7 +277,7 @@ private fun SearchSmsScreen(vm: BridgeViewModel, back: () -> Unit) {
                     else -> "Search on device"
                 })
             }
-            Text("Turning the toggle off can show only Slice/account/credit candidates that fail a banking pattern; unrelated messages remain hidden.", style = MaterialTheme.typography.bodySmall)
+            Text("Sender is optional. Account digits and at least one credit keyword must match. OTP, debit and promotional messages remain blocked.", style = MaterialTheme.typography.bodySmall)
             Spacer(Modifier.height(8.dp))
             if (vm.hasSearched) {
                 Text(
@@ -353,7 +353,11 @@ private fun SettingsScreen(vm: BridgeViewModel, back: () -> Unit) {
         enabled = !vm.isTestingConnection,
         modifier = Modifier.fillMaxWidth()
     ) { Text(if (vm.isTestingConnection) "Connecting…" else "Test Connection") }
-    OutlinedButton(onClick = vm::syncNow) { Text("Sync Matching Rules Now") }
+    OutlinedButton(
+        onClick = vm::syncRulesNow,
+        enabled = !vm.isSyncing,
+        modifier = Modifier.fillMaxWidth()
+    ) { Text(if (vm.isSyncing) "Syncing rules…" else "Sync Matching Rules Now") }
     Spacer(Modifier.height(12.dp))
     val rules = vm.rules()
     Text("Active rules", fontWeight = FontWeight.Bold)

@@ -49,7 +49,8 @@ class SmsSearchRepository(private val context: Context, private val dao: Transac
                 if (!SmsParser.isFinanciallyScopedCandidate(sender, body, rules)) continue
                 if (filters.sender.isNotBlank() && !sender.contains(filters.sender, true)) continue
                 if (filters.accountLast4.isNotBlank() && !body.contains(filters.accountLast4)) continue
-                if (filters.creditKeyword.isNotBlank() && !body.contains(filters.creditKeyword, true)) continue
+                val creditTerms = filters.creditKeyword.split(',').map { it.trim() }.filter { it.isNotBlank() }
+                if (creditTerms.isNotEmpty() && creditTerms.none { body.contains(it, true) }) continue
                 val rawTerms = filters.searchText.trim().split(Regex("\\s+")).filter { it.isNotBlank() }
                 if (rawTerms.any { !body.contains(it, true) }) continue
                 val parsed = SmsParser.parse(sender, body, receivedAt, rules)

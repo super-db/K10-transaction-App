@@ -38,10 +38,13 @@ data class RuleConfig(
             bankName = "Slice",
             allowedSenderIds = listOf("SLICE", "XX-SLICE"),
             accountLast4 = "7972",
-            requiredKeywords = listOf("received"),
+            requiredKeywords = listOf("received", "credited"),
             optionalKeywords = listOf("via UPI"),
             excludedKeywords = listOf("debited", "OTP"),
-            amountPatterns = listOf("Rs {amount} received", "₹{amount} received"),
+            amountPatterns = listOf(
+                "Rs {amount} received", "Rs. {amount} received", "INR {amount} received", "₹{amount} received",
+                "Rs {amount} credited", "Rs. {amount} credited", "INR {amount} credited", "₹{amount} credited"
+            ),
             payerPatterns = listOf("from {payer} via", "from {payer}."),
             datePatterns = listOf("on {date} from"),
             paymentMethodPatterns = listOf("via {payment_method}"),
@@ -93,7 +96,7 @@ object RuleValidator {
         }
         checkTemplates(config.amountPatterns, "{amount}", "amount_patterns", this)
         if (config.amountPatterns.any { pattern ->
-                !(pattern.contains("Rs", true) || pattern.contains('₹')) ||
+                !(pattern.contains("Rs", true) || pattern.contains("INR", true) || pattern.contains('₹')) ||
                     immutableCreditWords.none { pattern.contains(it, true) }
             }) add("each amount pattern must retain a currency marker and approved credit word")
         checkTemplates(config.payerPatterns, "{payer}", "payer patterns", this)

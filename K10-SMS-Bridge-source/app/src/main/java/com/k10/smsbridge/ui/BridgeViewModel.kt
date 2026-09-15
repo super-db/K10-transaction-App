@@ -43,6 +43,8 @@ class BridgeViewModel(app: Application) : AndroidViewModel(app) {
         private set
     var isSearching: Boolean by androidx.compose.runtime.mutableStateOf(false)
         private set
+    var isSyncing: Boolean by androidx.compose.runtime.mutableStateOf(false)
+        private set
     var hasSearched: Boolean by androidx.compose.runtime.mutableStateOf(false)
         private set
 
@@ -83,6 +85,34 @@ class BridgeViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun syncNow() {
+        enqueueSyncWork()
+        notifyUser("Pending transactions queued for sync")
+    }
+
+    fun syncRulesNow() {
+        if (isSyncing) return
+        viewModelScope.launch {
+            val settings = settings()
+            val token = token()
+            if (settings.backendUrl.isBlank() || token.isBlank()) {
+                notifyUser("Save the backend URL and API token first")
+                return@launch
+            }
+            isSyncing = true
+            runCatching {
+                val json = BackendClient.fetchRules(settings.backendUrl.trimEnd('/'), token)
+                Graph.rules.applyRemote(json).getOrThrow()
+            }.onSuccess {
+                enqueueSyncWork()
+                notifyUser("Matching rules updated to ${it.version}")
+            }.onFailure {
+                notifyUser(it.message ?: "Matching rules sync failed")
+            }
+            isSyncing = false
+        }
+    }
+
+    private fun enqueueSyncWork() {
         val request = OneTimeWorkRequestBuilder<SyncWorker>()
             .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
             .build()
@@ -91,7 +121,6 @@ class BridgeViewModel(app: Application) : AndroidViewModel(app) {
             ExistingWorkPolicy.APPEND_OR_REPLACE,
             request
         )
-        notifyUser("Rules and pending transactions queued for sync")
     }
 
     fun search(filters: SmsSearchFilters) {

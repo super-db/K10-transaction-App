@@ -34,16 +34,16 @@ object SmsParser {
     fun parse(sender: String, body: String, receivedAt: Long, rules: RuleConfig): ParseResult {
         if (!rules.enabled) return ParseResult(null, "Matching rules are disabled")
         val normalizedSender = sender.trim().uppercase()
-        if (!RuleValidator.isLocallyApprovedSender(normalizedSender)) return ParseResult(null, "Sender is not an approved financial sender")
         if (RuleValidator.hasImmutableExclusion(body)) return ParseResult(null, "Message contains a locally blocked OTP, debit, or promotional term")
         if (!RuleValidator.hasImmutableCreditSignal(body)) return ParseResult(null, "Message is not a credit transaction")
         if (rules.excludedKeywords.any { body.contains(it, true) }) return ParseResult(null, "Message contains an excluded term")
-        if (rules.requiredKeywords.any { !body.contains(it, true) }) return ParseResult(null, "A required credit keyword is missing")
+        if (rules.requiredKeywords.none { body.contains(it, true) }) return ParseResult(null, "A required credit keyword is missing")
         if (!Regex("(?<!\\d)${Regex.escape(rules.accountLast4)}(?!\\d)").containsMatchIn(body)) {
             return ParseResult(null, "Configured account digits are missing")
         }
 
         val amountText = captureFromTemplates(body, rules.amountPatterns, "{amount}", "[0-9][0-9,]*(?:\\.[0-9]{1,2})?")
+            ?: safeAmountFallback(body)
             ?: return ParseResult(null, "No supported banking amount pattern matched")
         val amountMinor = runCatching {
             BigDecimal(amountText.replace(",", "")).movePointRight(2).setScale(0, RoundingMode.UNNECESSARY).longValueExact()
@@ -51,9 +51,9 @@ object SmsParser {
 
         val payer = captureFromTemplates(body, rules.payerPatterns, "{payer}", "[\\p{L}][\\p{L} .'-]{0,79}")
             ?.trim()?.trimEnd('.') ?: "Unknown payer"
-        val dateText = captureFromTemplates(body, rules.datePatterns, "{date}", "[0-9]{1,2} [A-Za-z]{3,9}(?: [0-9]{4})?")
-            ?: return ParseResult(null, "No supported transaction date pattern matched")
-        val transactionDate = parseDate(dateText, receivedAt) ?: return ParseResult(null, "Transaction date is invalid")
+        val dateText = captureFromTemplates(body, rules.datePatterns, "{date}", "[0-9]{1,2}(?:[ ./-][A-Za-z]{3,9}|[./-][0-9]{1,2})(?:[ ./-][0-9]{2,4})?")
+        val transactionDate = dateText?.let { parseDate(it, receivedAt) }
+            ?: Instant.ofEpochMilli(receivedAt).atZone(ZoneId.systemDefault()).toLocalDate()
         val method = captureFromTemplates(body, rules.paymentMethodPatterns, "{payment_method}", "[A-Za-z][A-Za-z0-9 -]{1,30}")
             ?.trim()?.trimEnd('.')?.uppercase() ?: "UNKNOWN"
         val key = duplicateKey(normalizedSender, amountMinor, payer, rules.accountLast4, transactionDate, body)
@@ -74,10 +74,19 @@ object SmsParser {
     }
 
     fun isFinanciallyScopedCandidate(sender: String, body: String, rules: RuleConfig): Boolean =
-        RuleValidator.isLocallyApprovedSender(sender) &&
-            body.contains(rules.accountLast4) &&
+        body.contains(rules.accountLast4) &&
             RuleValidator.hasImmutableCreditSignal(body) &&
             !RuleValidator.hasImmutableExclusion(body)
+
+    private fun safeAmountFallback(body: String): String? {
+        val amount = "([0-9][0-9,]*(?:\\.[0-9]{1,2})?)"
+        val currency = "(?:₹|Rs\\.?|INR)"
+        val credit = "(?:received|credited|deposited)"
+        return Regex("$currency\\s*$amount\\s*(?:has\\s+been\\s+)?$credit", RegexOption.IGNORE_CASE)
+            .find(body)?.groupValues?.getOrNull(1)
+            ?: Regex("$credit(?:\\s+with)?\\s*$currency\\s*$amount", RegexOption.IGNORE_CASE)
+                .find(body)?.groupValues?.getOrNull(1)
+    }
 
     private fun captureFromTemplates(body: String, templates: List<String>, placeholder: String, capture: String): String? {
         for (template in templates) {
@@ -95,7 +104,10 @@ object SmsParser {
     private fun parseDate(value: String, receivedAt: Long): LocalDate? {
         val received = Instant.ofEpochMilli(receivedAt).atZone(ZoneId.systemDefault()).toLocalDate()
         val clean = value.trim().replace(Regex("\\s+"), " ")
-        val formats = listOf("d MMM uuuu", "d MMMM uuuu")
+        val formats = listOf(
+            "d MMM uuuu", "d MMMM uuuu", "d-MMM-uuuu", "d/MMM/uuuu",
+            "d-M-uuuu", "d/M/uuuu", "d.M.uuuu", "d-M-uu", "d/M/uu"
+        )
         formats.forEach { pattern ->
             try { return LocalDate.parse(clean, DateTimeFormatter.ofPattern(pattern, Locale.ENGLISH)) }
             catch (_: DateTimeParseException) { }
