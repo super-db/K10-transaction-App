@@ -91,8 +91,35 @@ private fun HomeScreen(vm: BridgeViewModel, openLog: () -> Unit, openSearch: () 
     val settings = vm.settings()
     val lastSuccess = transactions.filter { it.syncStatus == "SYNCED" }.maxOfOrNull { it.statusUpdatedAt }
 
-    Text("K10 SMS Bridge", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+    val startOfToday = LocalDate.now().atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
+    val receivedToday = transactions.filter { it.smsReceivedTimestamp >= startOfToday }.sumOf { it.amountMinor }
+
+    Text("K10 Pay", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+    Text("Slice transaction assistant", color = MaterialTheme.colorScheme.onSurfaceVariant)
     Spacer(Modifier.height(16.dp))
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(20.dp)) {
+            Text("K10 SLICE ACCOUNT", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+            Text(formatMoney(receivedToday), style = MaterialTheme.typography.headlineLarge, fontWeight = FontWeight.Bold)
+            Text("Received today • $today transaction(s)")
+            Spacer(Modifier.height(8.dp))
+            Text("Account •••• ${rules.accountLast4}", style = MaterialTheme.typography.bodySmall)
+        }
+    }
+    transactions.firstOrNull()?.let { latest ->
+        Spacer(Modifier.height(12.dp))
+        Text("Latest transaction", fontWeight = FontWeight.SemiBold)
+        Card(onClick = openLog, modifier = Modifier.fillMaxWidth().padding(top = 6.dp)) {
+            Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(latest.payerName, fontWeight = FontWeight.SemiBold)
+                    Text(formatTimestamp(latest.smsReceivedTimestamp), style = MaterialTheme.typography.bodySmall)
+                }
+                Text(formatMoney(latest.amountMinor), fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+            }
+        }
+    }
+    Spacer(Modifier.height(14.dp))
     Text(if (settings.serviceEnabled && rules.enabled && permissionGranted) "🟢 Service Active" else "🔴 Service Not Running")
     InfoRow("SMS permission", if (permissionGranted) "Granted" else "Not Granted")
     InfoRow("Current account filter", "xx${rules.accountLast4}")
@@ -111,7 +138,7 @@ private fun HomeScreen(vm: BridgeViewModel, openLog: () -> Unit, openSearch: () 
         OutlinedButton(onClick = vm::syncNow) { Text("Retry / Sync") }
     }
     OutlinedButton(onClick = openSearch, modifier = Modifier.fillMaxWidth()) { Text("Search SMS") }
-    OutlinedButton(onClick = openLog, modifier = Modifier.fillMaxWidth()) { Text("View Transaction Log") }
+    OutlinedButton(onClick = openLog, modifier = Modifier.fillMaxWidth()) { Text("All Transactions") }
     OutlinedButton(onClick = openSettings, modifier = Modifier.fillMaxWidth()) { Text("Settings") }
 }
 

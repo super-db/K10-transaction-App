@@ -26,7 +26,11 @@ class SmsReceiver : BroadcastReceiver() {
                     val body = parts.joinToString("") { it.messageBody.orEmpty() }
                     val received = parts.minOfOrNull { it.timestampMillis } ?: System.currentTimeMillis()
                     SmsParser.parse(sender, body, received, Graph.rules.current()).transaction?.let {
-                        if (Graph.database.transactions().insert(it.toEntity()) != -1L) enqueueSync(context)
+                        val entity = it.toEntity()
+                        if (Graph.database.transactions().insert(entity) != -1L) {
+                            Graph.announcer.announceReceived(entity.amountMinor)
+                            enqueueSync(context)
+                        }
                     }
                 }
             } finally {
