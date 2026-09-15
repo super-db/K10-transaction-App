@@ -36,7 +36,7 @@ class RuleStore(context: Context) {
     }.onFailure { prefs.edit().putString(KEY_LAST_ERROR, it.message).apply() }
 
     fun settings(): BridgeSettings = BridgeSettings(
-        backendUrl = prefs.getString(KEY_BACKEND_URL, "") ?: "",
+        backendUrl = prefs.getString(KEY_BACKEND_URL, DEFAULT_BACKEND_URL).orEmpty().ifBlank { DEFAULT_BACKEND_URL },
         serviceEnabled = prefs.getBoolean(KEY_SERVICE_ENABLED, true)
     )
 
@@ -69,6 +69,7 @@ class RuleStore(context: Context) {
         private const val KEY_LAST_ERROR = "last_rules_error"
         private const val KEY_BACKEND_URL = "backend_url"
         private const val KEY_SERVICE_ENABLED = "service_enabled"
+        const val DEFAULT_BACKEND_URL = "https://finances.k10classes.com"
     }
 }
 
