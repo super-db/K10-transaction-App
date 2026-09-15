@@ -35,7 +35,6 @@ object SmsParser {
         if (!rules.enabled) return ParseResult(null, "Matching rules are disabled")
         val normalizedSender = sender.trim().uppercase()
         if (!RuleValidator.isLocallyApprovedSender(normalizedSender)) return ParseResult(null, "Sender is not an approved financial sender")
-        if (rules.allowedSenderIds.none { it.trim().uppercase() == normalizedSender }) return ParseResult(null, "Sender is not in the active allowlist")
         if (RuleValidator.hasImmutableExclusion(body)) return ParseResult(null, "Message contains a locally blocked OTP, debit, or promotional term")
         if (!RuleValidator.hasImmutableCreditSignal(body)) return ParseResult(null, "Message is not a credit transaction")
         if (rules.excludedKeywords.any { body.contains(it, true) }) return ParseResult(null, "Message contains an excluded term")
@@ -76,7 +75,6 @@ object SmsParser {
 
     fun isFinanciallyScopedCandidate(sender: String, body: String, rules: RuleConfig): Boolean =
         RuleValidator.isLocallyApprovedSender(sender) &&
-            rules.allowedSenderIds.any { it.equals(sender.trim(), true) } &&
             body.contains(rules.accountLast4) &&
             RuleValidator.hasImmutableCreditSignal(body) &&
             !RuleValidator.hasImmutableExclusion(body)

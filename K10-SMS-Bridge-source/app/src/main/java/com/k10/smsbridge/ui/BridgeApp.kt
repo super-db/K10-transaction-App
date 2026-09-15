@@ -25,10 +25,13 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -57,8 +60,13 @@ private enum class Screen { HOME, LOG, SEARCH, SETTINGS }
 @Composable
 fun BridgeApp(vm: BridgeViewModel = viewModel()) {
     var screen by remember { mutableStateOf(Screen.HOME) }
-    Scaffold { padding ->
+    val snackbarHostState = remember { SnackbarHostState() }
+    LaunchedEffect(vm.messageVersion) {
+        if (vm.messageVersion > 0 && vm.message.isNotBlank()) snackbarHostState.showSnackbar(vm.message)
+    }
+    Scaffold(snackbarHost = { SnackbarHost(snackbarHostState) }) { padding ->
         val scrollState = rememberScrollState()
+        LaunchedEffect(screen) { scrollState.scrollTo(0) }
         val pageModifier = Modifier
             .fillMaxSize()
             .padding(padding)
@@ -76,10 +84,6 @@ fun BridgeApp(vm: BridgeViewModel = viewModel()) {
                 Screen.LOG -> TransactionLog(vm) { screen = Screen.HOME }
                 Screen.SEARCH -> SearchSmsScreen(vm) { screen = Screen.HOME }
                 Screen.SETTINGS -> SettingsScreen(vm) { screen = Screen.HOME }
-            }
-            if (vm.message.isNotBlank()) {
-                Spacer(Modifier.height(10.dp))
-                Text(vm.message, color = MaterialTheme.colorScheme.primary)
             }
         }
     }
@@ -153,7 +157,9 @@ private fun HomeScreen(vm: BridgeViewModel, openLog: () -> Unit, openSearch: () 
     Spacer(Modifier.height(16.dp))
     if (!permissionGranted) Button(onClick = { permissionLauncher.launch(arrayOf(Manifest.permission.RECEIVE_SMS, Manifest.permission.READ_SMS)) }) { Text("Grant SMS Permission") }
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Button(onClick = { vm.testConnection() }) { Text("Test Connection") }
+        Button(onClick = { vm.testConnection() }, enabled = !vm.isTestingConnection) {
+            Text(if (vm.isTestingConnection) "Connecting…" else "Test Connection")
+        }
         OutlinedButton(onClick = vm::syncNow) { Text("Retry / Sync") }
     }
     OutlinedButton(onClick = openSearch, modifier = Modifier.fillMaxWidth()) { Text("Search SMS") }
@@ -165,10 +171,30 @@ private fun HomeScreen(vm: BridgeViewModel, openLog: () -> Unit, openSearch: () 
 private fun TransactionLog(vm: BridgeViewModel, back: () -> Unit) {
     val transactions by vm.transactions.collectAsState(emptyList())
     var selected by remember { mutableStateOf<TransactionEntity?>(null) }
+    var range by remember { mutableStateOf("Today") }
+    val todayStart = LocalDate.now().atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
+    val cutoff = when (range) {
+        "15d" -> LocalDate.now().minusDays(14).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
+        "30d" -> LocalDate.now().minusDays(29).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
+        "All" -> Long.MIN_VALUE
+        else -> todayStart
+    }
+    val visibleTransactions = transactions.filter { it.smsReceivedTimestamp >= cutoff }
     Header("Transaction Log", back)
     Text("Only eligible transactions detected or imported by K10 are shown.")
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        listOf("Today", "15d", "30d", "All").forEach { option ->
+            OutlinedButton(onClick = { range = option }, modifier = Modifier.weight(1f)) {
+                Text(if (option == "All") "Lifetime" else option)
+            }
+        }
+    }
+    Text("${visibleTransactions.size} transaction(s)", style = MaterialTheme.typography.bodySmall)
     LazyColumn(Modifier.fillMaxSize()) {
-        items(transactions, key = { it.uniqueLocalId }) { item ->
+        if (visibleTransactions.isEmpty()) {
+            item { Text("No transactions in this period.", modifier = Modifier.padding(vertical = 20.dp)) }
+        }
+        items(visibleTransactions, key = { it.uniqueLocalId }) { item ->
             Card(onClick = { selected = item }, modifier = Modifier.fillMaxWidth().padding(vertical = 5.dp)) {
                 Column(Modifier.padding(12.dp)) {
                     Text(formatDate(item.smsReceivedTimestamp), fontWeight = FontWeight.SemiBold)
@@ -206,18 +232,26 @@ private fun SearchSmsScreen(vm: BridgeViewModel, back: () -> Unit) {
     val context = LocalContext.current
     var canRead by remember { mutableStateOf(ContextCompat.checkSelfPermission(context, Manifest.permission.READ_SMS) == PackageManager.PERMISSION_GRANTED) }
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { canRead = it }
-    var from by remember { mutableStateOf(LocalDate.now().minusDays(7).toString()) }
+    var from by remember { mutableStateOf(LocalDate.now().minusDays(29).toString()) }
     var to by remember { mutableStateOf(LocalDate.now().toString()) }
     var sender by remember { mutableStateOf("") }
     var account by remember { mutableStateOf(vm.rules().accountLast4) }
     var credit by remember { mutableStateOf("received") }
     var rawText by remember { mutableStateOf("") }
     var eligibleOnly by remember { mutableStateOf(true) }
+    val today = LocalDate.now()
 
     Header("Search SMS", back)
     Text("Search runs only on this phone. Results are never uploaded until you choose Import.")
     LazyColumn(Modifier.fillMaxSize()) {
         item {
+            Text("Quick range", fontWeight = FontWeight.SemiBold)
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                OutlinedButton(onClick = { from = today.toString(); to = today.toString() }, modifier = Modifier.weight(1f)) { Text("Today") }
+                OutlinedButton(onClick = { from = today.minusDays(14).toString(); to = today.toString() }, modifier = Modifier.weight(1f)) { Text("15d") }
+                OutlinedButton(onClick = { from = today.minusDays(29).toString(); to = today.toString() }, modifier = Modifier.weight(1f)) { Text("30d") }
+                OutlinedButton(onClick = { from = "2000-01-01"; to = today.toString() }, modifier = Modifier.weight(1f)) { Text("All") }
+            }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Field(from, { from = it }, "Date From (YYYY-MM-DD)", Modifier.weight(1f))
                 Field(to, { to = it }, "Date To (YYYY-MM-DD)", Modifier.weight(1f))
@@ -236,9 +270,24 @@ private fun SearchSmsScreen(vm: BridgeViewModel, back: () -> Unit) {
                     val end = runCatching { LocalDate.parse(to).plusDays(1).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli() - 1 }.getOrDefault(System.currentTimeMillis())
                     vm.search(SmsSearchFilters(start, end, sender, account, credit, rawText, eligibleOnly))
                 }
-            }) { Text(if (canRead) "Search on device" else "Grant permission") }
+            }, enabled = !vm.isSearching) {
+                Text(when {
+                    !canRead -> "Grant permission"
+                    vm.isSearching -> "Searching…"
+                    else -> "Search on device"
+                })
+            }
             Text("Turning the toggle off can show only Slice/account/credit candidates that fail a banking pattern; unrelated messages remain hidden.", style = MaterialTheme.typography.bodySmall)
             Spacer(Modifier.height(8.dp))
+            if (vm.hasSearched) {
+                Text(
+                    if (vm.searchResults.isEmpty()) "No matching transactions found in this date range."
+                    else "${vm.searchResults.size} matching transaction(s)",
+                    fontWeight = FontWeight.SemiBold,
+                    color = if (vm.searchResults.isEmpty()) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+                )
+                Spacer(Modifier.height(8.dp))
+            }
             if (vm.searchResults.any { it.parseResult.eligible && !it.alreadyAdded }) {
                 OutlinedButton(onClick = vm::importAll) { Text("Import All Eligible") }
             }
@@ -279,7 +328,7 @@ private fun SettingsScreen(vm: BridgeViewModel, back: () -> Unit) {
     var account by remember { mutableStateOf(vm.rules().accountLast4) }
     var senders by remember { mutableStateOf(vm.rules().allowedSenderIds.joinToString(", ")) }
     Header("Settings", back)
-    Text("Remote matching rules can change approved Slice senders, account last4, and parsing templates. Local privacy checks cannot be disabled.")
+    Text("Account last4, received-credit wording and the banking format are compulsory. Known Slice sender IDs are retained as references, while new official Slice prefixes are accepted automatically.")
     Field(url, { url = it }, "Backend HTTPS URL")
     OutlinedTextField(
         value = token,
@@ -289,13 +338,21 @@ private fun SettingsScreen(vm: BridgeViewModel, back: () -> Unit) {
         modifier = Modifier.fillMaxWidth()
     )
     Field(account, { account = it.filter(Char::isDigit).take(4) }, "Expected account last4")
-    Field(senders, { senders = it }, "Approved Slice sender IDs (comma-separated)")
+    Field(senders, { senders = it }, "Known Slice sender IDs (new prefixes are accepted)")
     Row(verticalAlignment = Alignment.CenterVertically) {
         Text("Service enabled", Modifier.weight(1f))
         Switch(enabled, { enabled = it })
     }
-    Button(onClick = { vm.saveSettings(url, token, enabled, account, senders) }) { Text("Save") }
-    OutlinedButton(onClick = { vm.testConnection(url, token) }) { Text("Test Connection") }
+    Button(
+        onClick = { vm.saveSettings(url, token, enabled, account, senders) },
+        enabled = !vm.isSaving,
+        modifier = Modifier.fillMaxWidth()
+    ) { Text(if (vm.isSaving) "Saving…" else "Save settings") }
+    OutlinedButton(
+        onClick = { vm.testConnection(url, token) },
+        enabled = !vm.isTestingConnection,
+        modifier = Modifier.fillMaxWidth()
+    ) { Text(if (vm.isTestingConnection) "Connecting…" else "Test Connection") }
     OutlinedButton(onClick = vm::syncNow) { Text("Sync Matching Rules Now") }
     Spacer(Modifier.height(12.dp))
     val rules = vm.rules()
