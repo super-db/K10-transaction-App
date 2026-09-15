@@ -57,6 +57,9 @@ object SmsParser {
 
         val payer = captureFromTemplates(body, rules.payerPatterns, "{payer}", "[\\p{L}][\\p{L} .'-]{0,79}")
             ?.trim()?.trimEnd('.') ?: "Unknown payer"
+        if (rules.excludedPayerNames.any { normalizePayer(it) == normalizePayer(payer) }) {
+            return ParseResult(null, "Payer is excluded by K10 rules")
+        }
         val dateText = captureFromTemplates(body, rules.datePatterns, "{date}", "[0-9]{1,2}(?:[ ./-][A-Za-z]{3,9}|[./-][0-9]{1,2})(?:[ ./-][0-9]{2,4})?")
         val transactionDate = dateText?.let { parseDate(it, receivedAt) }
             ?: Instant.ofEpochMilli(receivedAt).atZone(ZoneId.systemDefault()).toLocalDate()
@@ -106,6 +109,12 @@ object SmsParser {
         }
         return false
     }
+
+    private fun normalizePayer(value: String): String = value
+        .lowercase(Locale.ENGLISH)
+        .replace(Regex("^(?:mr|mrs|ms|miss|shri|sri|dr)\\.?\\s+", RegexOption.IGNORE_CASE), "")
+        .replace(Regex("[^\\p{L}\\p{N}]+"), " ")
+        .trim().replace(Regex("\\s+"), " ")
 
     private fun safeAmountFallback(body: String): String? {
         val amount = "([0-9][0-9,]*(?:\\.[0-9]{1,2})?)"
