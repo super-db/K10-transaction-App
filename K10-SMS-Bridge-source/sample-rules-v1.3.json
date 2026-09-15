@@ -1,0 +1,14 @@
+{
+  "version": "v1.3",
+  "bank_name": "Slice",
+  "allowed_sender_ids": ["SLICE", "XX-SLICE"],
+  "account_last4": "7972",
+  "required_keywords": ["received"],
+  "optional_keywords": ["via UPI"],
+  "excluded_keywords": ["debited", "OTP"],
+  "amount_patterns": ["Rs {amount} received", "₹{amount} received"],
+  "payer_extraction_patterns": ["from {payer} via", "from {payer}."],
+  "date_extraction_patterns": ["on {date} from"],
+  "payment_method_patterns": ["via {payment_method}"],
+  "enabled": true
+}

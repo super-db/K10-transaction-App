@@ -1,0 +1,120 @@
+package com.k10.smsbridge.sms
+
+import com.k10.smsbridge.rules.RuleConfig
+import com.k10.smsbridge.rules.RuleValidator
+import java.math.BigDecimal
+import java.math.RoundingMode
+import java.security.MessageDigest
+import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.time.format.DateTimeParseException
+import java.util.Locale
+import java.util.UUID
+
+data class ParsedSms(
+    val uniqueLocalId: String = UUID.randomUUID().toString(),
+    val duplicateKey: String,
+    val payerName: String,
+    val amountMinor: Long,
+    val transactionDate: LocalDate,
+    val smsReceivedTimestamp: Long,
+    val accountLast4: String,
+    val paymentMethod: String,
+    val senderId: String,
+    val rawEligibleSms: String
+)
+
+data class ParseResult(val transaction: ParsedSms?, val reason: String) {
+    val eligible: Boolean get() = transaction != null
+}
+
+object SmsParser {
+    fun parse(sender: String, body: String, receivedAt: Long, rules: RuleConfig): ParseResult {
+        if (!rules.enabled) return ParseResult(null, "Matching rules are disabled")
+        val normalizedSender = sender.trim().uppercase()
+        if (!RuleValidator.isLocallyApprovedSender(normalizedSender)) return ParseResult(null, "Sender is not an approved financial sender")
+        if (rules.allowedSenderIds.none { it.trim().uppercase() == normalizedSender }) return ParseResult(null, "Sender is not in the active allowlist")
+        if (RuleValidator.hasImmutableExclusion(body)) return ParseResult(null, "Message contains a locally blocked OTP, debit, or promotional term")
+        if (!RuleValidator.hasImmutableCreditSignal(body)) return ParseResult(null, "Message is not a credit transaction")
+        if (rules.excludedKeywords.any { body.contains(it, true) }) return ParseResult(null, "Message contains an excluded term")
+        if (rules.requiredKeywords.any { !body.contains(it, true) }) return ParseResult(null, "A required credit keyword is missing")
+        if (!Regex("(?<!\\d)${Regex.escape(rules.accountLast4)}(?!\\d)").containsMatchIn(body)) {
+            return ParseResult(null, "Configured account digits are missing")
+        }
+
+        val amountText = captureFromTemplates(body, rules.amountPatterns, "{amount}", "[0-9][0-9,]*(?:\\.[0-9]{1,2})?")
+            ?: return ParseResult(null, "No supported banking amount pattern matched")
+        val amountMinor = runCatching {
+            BigDecimal(amountText.replace(",", "")).movePointRight(2).setScale(0, RoundingMode.UNNECESSARY).longValueExact()
+        }.getOrNull()?.takeIf { it > 0 } ?: return ParseResult(null, "Amount is invalid")
+
+        val payer = captureFromTemplates(body, rules.payerPatterns, "{payer}", "[\\p{L}][\\p{L} .'-]{0,79}")
+            ?.trim()?.trimEnd('.') ?: "Unknown payer"
+        val dateText = captureFromTemplates(body, rules.datePatterns, "{date}", "[0-9]{1,2} [A-Za-z]{3,9}(?: [0-9]{4})?")
+            ?: return ParseResult(null, "No supported transaction date pattern matched")
+        val transactionDate = parseDate(dateText, receivedAt) ?: return ParseResult(null, "Transaction date is invalid")
+        val method = captureFromTemplates(body, rules.paymentMethodPatterns, "{payment_method}", "[A-Za-z][A-Za-z0-9 -]{1,30}")
+            ?.trim()?.trimEnd('.')?.uppercase() ?: "UNKNOWN"
+        val key = duplicateKey(normalizedSender, amountMinor, payer, rules.accountLast4, transactionDate, body)
+        return ParseResult(
+            ParsedSms(
+                duplicateKey = key,
+                payerName = payer,
+                amountMinor = amountMinor,
+                transactionDate = transactionDate,
+                smsReceivedTimestamp = receivedAt,
+                accountLast4 = rules.accountLast4,
+                paymentMethod = method,
+                senderId = normalizedSender,
+                rawEligibleSms = body
+            ),
+            "Eligible"
+        )
+    }
+
+    fun isFinanciallyScopedCandidate(sender: String, body: String, rules: RuleConfig): Boolean =
+        RuleValidator.isLocallyApprovedSender(sender) &&
+            rules.allowedSenderIds.any { it.equals(sender.trim(), true) } &&
+            body.contains(rules.accountLast4) &&
+            RuleValidator.hasImmutableCreditSignal(body) &&
+            !RuleValidator.hasImmutableExclusion(body)
+
+    private fun captureFromTemplates(body: String, templates: List<String>, placeholder: String, capture: String): String? {
+        for (template in templates) {
+            val index = template.indexOf(placeholder)
+            if (index < 0) continue
+            fun literal(value: String): String = value.trim().split(Regex("\\s+")).joinToString("\\s+") { Regex.escape(it) }
+            val before = literal(template.substring(0, index))
+            val after = literal(template.substring(index + placeholder.length))
+            val regex = Regex("$before\\s*($capture)\\s*$after", setOf(RegexOption.IGNORE_CASE))
+            regex.find(body)?.groupValues?.getOrNull(1)?.let { return it }
+        }
+        return null
+    }
+
+    private fun parseDate(value: String, receivedAt: Long): LocalDate? {
+        val received = Instant.ofEpochMilli(receivedAt).atZone(ZoneId.systemDefault()).toLocalDate()
+        val clean = value.trim().replace(Regex("\\s+"), " ")
+        val formats = listOf("d MMM uuuu", "d MMMM uuuu")
+        formats.forEach { pattern ->
+            try { return LocalDate.parse(clean, DateTimeFormatter.ofPattern(pattern, Locale.ENGLISH)) }
+            catch (_: DateTimeParseException) { }
+        }
+        val withoutYear = listOf("d MMM", "d MMMM")
+        withoutYear.forEach { pattern ->
+            try {
+                var candidate = LocalDate.parse("$clean ${received.year}", DateTimeFormatter.ofPattern("$pattern uuuu", Locale.ENGLISH))
+                if (candidate.isAfter(received.plusDays(31))) candidate = candidate.minusYears(1)
+                return candidate
+            } catch (_: DateTimeParseException) { }
+        }
+        return null
+    }
+
+    private fun duplicateKey(sender: String, amountMinor: Long, payer: String, account: String, date: LocalDate, raw: String): String {
+        val canonical = listOf(sender, amountMinor, payer.trim().uppercase(), account, date, raw.trim()).joinToString("|")
+        return MessageDigest.getInstance("SHA-256").digest(canonical.toByteArray()).joinToString("") { "%02x".format(it) }
+    }
+}
