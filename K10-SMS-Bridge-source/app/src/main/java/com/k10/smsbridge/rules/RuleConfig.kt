@@ -38,10 +38,13 @@ data class RuleConfig(
             bankName = "Slice",
             allowedSenderIds = listOf("SLICE", "XX-SLICE"),
             accountLast4 = "7972",
-            requiredKeywords = listOf("received"),
+            requiredKeywords = listOf("received", "credited"),
             optionalKeywords = listOf("via UPI"),
             excludedKeywords = listOf("debited", "OTP"),
-            amountPatterns = listOf("Rs {amount} received", "₹{amount} received"),
+            amountPatterns = listOf(
+                "Rs {amount} received", "Rs. {amount} received", "INR {amount} received", "₹{amount} received",
+                "Rs {amount} credited", "Rs. {amount} credited", "INR {amount} credited", "₹{amount} credited"
+            ),
             payerPatterns = listOf("from {payer} via", "from {payer}."),
             datePatterns = listOf("on {date} from"),
             paymentMethodPatterns = listOf("via {payment_method}"),
