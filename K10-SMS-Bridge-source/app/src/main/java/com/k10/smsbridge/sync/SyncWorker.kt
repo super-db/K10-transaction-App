@@ -26,7 +26,7 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
                     val localStatus = when (response.status.lowercase()) {
                         "success" -> "SYNCED"
                         "duplicate" -> "DUPLICATE"
-                        "rejected", "validation_error" -> "REJECTED"
+                        "rejected", "validation_error", "excluded" -> "REJECTED"
                         "authentication_error" -> "FAILED"
                         else -> "FAILED"
                     }
