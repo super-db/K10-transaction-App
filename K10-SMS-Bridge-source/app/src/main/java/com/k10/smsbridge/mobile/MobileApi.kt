@@ -1,0 +1,21 @@
+package com.k10.smsbridge.mobile
+import com.k10.smsbridge.BuildConfig
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import org.json.JSONArray
+import org.json.JSONObject
+import java.net.HttpURLConnection
+import java.net.URL
+data class MobileAccount(val id:String,val name:String)
+data class MobileTransaction(val id:String,val payerName:String,val amount:Double?,val occurredAt:String,val paymentMethod:String,val status:String)
+object MobileApi{
+ const val BASE_URL="https://finances.k10classes.com"
+ suspend fun accounts():List<MobileAccount>=withContext(Dispatchers.IO){val(_,body)=request("/api/mobile/auth","GET",null,null);val array=JSONObject(body).optJSONArray("accounts")?:JSONArray();(0 until array.length()).map{array.getJSONObject(it)}.map{MobileAccount(it.getString("id"),it.getString("name"))}}
+ suspend fun login(loginId:String,password:String):MobileSession=withContext(Dispatchers.IO){val(code,body)=request("/api/mobile/auth","POST",null,JSONObject().put("loginId",loginId).put("password",password).toString());val json=JSONObject(body);if(code !in 200..299)error(json.optString("error","Sign in failed"));val user=json.getJSONObject("user"),permissions=user.optJSONArray("permissions")?:JSONArray();MobileSession(json.getString("token"),user.getString("loginId"),user.getString("displayName"),user.getString("role"),(0 until permissions.length()).map{permissions.getString(it)}.toSet())}
+ suspend fun transactions(session:MobileSession,range:String):List<MobileTransaction>=withContext(Dispatchers.IO){val(code,body)=request("/api/mobile/transactions?range=$range","GET",session.token,null);val json=JSONObject(body);if(code !in 200..299)error(json.optString("error","Could not load transactions"));val array=json.optJSONArray("transactions")?:JSONArray();(0 until array.length()).map{array.getJSONObject(it)}.map{MobileTransaction(it.getString("id"),it.optString("payerName","Unknown payer"),if(it.isNull("amount"))null else it.optDouble("amount"),it.optString("occurredAt"),it.optString("paymentMethod","UNKNOWN"),it.optString("status","new"))}}
+ suspend fun register(session:MobileSession,fcmToken:String,deviceId:String,bridge:Boolean)=withContext(Dispatchers.IO){val payload=JSONObject().put("fcmToken",fcmToken).put("deviceId",deviceId).put("appVersion",BuildConfig.VERSION_NAME).put("bridgeDevice",bridge);val(code,body)=request("/api/mobile/devices","POST",session.token,payload.toString());if(code !in 200..299)error(JSONObject(body).optString("error","Device registration failed"))}
+ suspend fun unregister(session:MobileSession,deviceId:String)=withContext(Dispatchers.IO){request("/api/mobile/devices","DELETE",session.token,JSONObject().put("deviceId",deviceId).toString())}
+ suspend fun exclusions(session:MobileSession):List<String>=withContext(Dispatchers.IO){val(code,body)=request("/api/mobile/exclusions","GET",session.token,null);val json=JSONObject(body);if(code !in 200..299)error(json.optString("error","Could not load exclusions"));val array=json.optJSONArray("names")?:JSONArray();(0 until array.length()).map{array.getString(it)}}
+ suspend fun saveExclusions(session:MobileSession,names:List<String>):List<String>=withContext(Dispatchers.IO){val(code,body)=request("/api/mobile/exclusions","PUT",session.token,JSONObject().put("names",JSONArray(names)).toString());val json=JSONObject(body);if(code !in 200..299)error(json.optString("error","Could not save exclusions"));val array=json.optJSONArray("names")?:JSONArray();(0 until array.length()).map{array.getString(it)}}
+ private fun request(path:String,method:String,token:String?,body:String?):Pair<Int,String>{val connection=(URL(BASE_URL+path).openConnection() as HttpURLConnection).apply{requestMethod=method;connectTimeout=15_000;readTimeout=20_000;setRequestProperty("Accept","application/json");if(token!=null)setRequestProperty("Authorization","Bearer $token");if(body!=null){doOutput=true;setRequestProperty("Content-Type","application/json");outputStream.use{it.write(body.toByteArray())}}};return try{val code=connection.responseCode;val stream=if(code in 200..399)connection.inputStream else connection.errorStream;code to(stream?.bufferedReader()?.use{it.readText()}?:"")}finally{connection.disconnect()}}
+}
