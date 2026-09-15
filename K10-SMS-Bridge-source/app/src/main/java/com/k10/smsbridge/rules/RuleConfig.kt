@@ -96,7 +96,7 @@ object RuleValidator {
         }
         checkTemplates(config.amountPatterns, "{amount}", "amount_patterns", this)
         if (config.amountPatterns.any { pattern ->
-                !(pattern.contains("Rs", true) || pattern.contains('₹')) ||
+                !(pattern.contains("Rs", true) || pattern.contains("INR", true) || pattern.contains('₹')) ||
                     immutableCreditWords.none { pattern.contains(it, true) }
             }) add("each amount pattern must retain a currency marker and approved credit word")
         checkTemplates(config.payerPatterns, "{payer}", "payer patterns", this)
