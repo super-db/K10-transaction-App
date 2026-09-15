@@ -41,6 +41,17 @@ class SmsParserTest {
     }
 
     @Test
+    fun acceptsRotatingSlicePrefixWithoutAnAppUpdate() {
+        val result = SmsParser.parse(
+            "JD-SLICE",
+            "Rs 2000 received in A/c xx7972 on 2 Sep from A Person via UPI.",
+            receivedAt,
+            RuleConfig.DEFAULT
+        )
+        assertTrue(result.reason, result.eligible)
+    }
+
+    @Test
     fun decemberMessageReceivedInJanuaryUsesPreviousYear() {
         val january = LocalDateTime.of(2027, 1, 2, 8, 0).toInstant(ZoneOffset.UTC).toEpochMilli()
         val result = SmsParser.parse("SLICE", "Rs 10 received in A/c xx7972 on 31 Dec from A Person via UPI.", january, RuleConfig.DEFAULT)
