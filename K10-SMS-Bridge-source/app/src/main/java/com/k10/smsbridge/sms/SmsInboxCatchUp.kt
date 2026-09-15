@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.provider.Telephony
 import androidx.core.content.ContextCompat
+import com.k10.smsbridge.Graph
 import com.k10.smsbridge.data.TransactionDao
 import com.k10.smsbridge.data.toEntity
 import com.k10.smsbridge.rules.RuleConfig
@@ -47,7 +48,12 @@ object SmsInboxCatchUp {
                         cursor.getLong(dateIndex),
                         rules
                     ).transaction ?: continue
-                    if (dao.insert(parsed.toEntity()) != -1L) added++
+                    val entity = parsed.toEntity()
+                    if (dao.insert(entity) != -1L) {
+                        added++
+                        Graph.announcer.announceReceived(entity.amountMinor)
+                        Graph.notifier.notifyReceived(entity.amountMinor, entity.payerName, entity.uniqueLocalId)
+                    }
                 }
             }
             prefs.edit().putLong(LAST_SCAN, now).apply()
