@@ -2,6 +2,7 @@ package com.k10.smsbridge.ui
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.os.Build
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -104,8 +105,12 @@ private fun HomeScreen(vm: BridgeViewModel, openLog: () -> Unit, openSearch: () 
                 ContextCompat.checkSelfPermission(context, Manifest.permission.READ_SMS) == PackageManager.PERMISSION_GRANTED
         )
     }
+    var notificationGranted by remember {
+        mutableStateOf(Build.VERSION.SDK_INT < 33 || ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED)
+    }
     val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
         permissionGranted = it[Manifest.permission.RECEIVE_SMS] == true && it[Manifest.permission.READ_SMS] == true
+        notificationGranted = Build.VERSION.SDK_INT < 33 || it[Manifest.permission.POST_NOTIFICATIONS] == true
         if (permissionGranted) vm.syncNow()
     }
     val pending by vm.pendingCount.collectAsState(0)
@@ -152,6 +157,7 @@ private fun HomeScreen(vm: BridgeViewModel, openLog: () -> Unit, openSearch: () 
     Spacer(Modifier.height(14.dp))
     Text(if (settings.serviceEnabled && rules.enabled && permissionGranted) "🟢 Service Active" else "🔴 Service Not Running")
     InfoRow("SMS permission", if (permissionGranted) "Granted" else "Not Granted")
+    InfoRow("Notification alerts", if (notificationGranted) "Granted" else "Not Granted")
     InfoRow("Current account filter", "xx${rules.accountLast4}")
     InfoRow("Backend connection", when (vm.connectionOk) { true -> "Connected"; false -> "Error"; null -> "Not tested" })
     InfoRow("Last successful sync", lastSuccess?.let(::formatTimestamp) ?: "Never")
@@ -162,7 +168,16 @@ private fun HomeScreen(vm: BridgeViewModel, openLog: () -> Unit, openSearch: () 
     InfoRow("Matching Rules Version", rules.version)
     InfoRow("Last Rules Sync", vm.rulesLastSync().takeIf { it > 0 }?.let(::formatTimestamp) ?: "Using bundled rules")
     Spacer(Modifier.height(16.dp))
-    if (!permissionGranted) Button(onClick = { permissionLauncher.launch(arrayOf(Manifest.permission.RECEIVE_SMS, Manifest.permission.READ_SMS)) }) { Text("Grant SMS Permission") }
+    if (!permissionGranted || !notificationGranted) Button(
+        onClick = {
+            permissionLauncher.launch(buildList {
+                add(Manifest.permission.RECEIVE_SMS)
+                add(Manifest.permission.READ_SMS)
+                if (Build.VERSION.SDK_INT >= 33) add(Manifest.permission.POST_NOTIFICATIONS)
+            }.toTypedArray())
+        },
+        modifier = Modifier.fillMaxWidth()
+    ) { Text("Grant SMS & Notification Permissions") }
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         Button(onClick = { vm.testConnection() }, enabled = !vm.isTestingConnection, modifier = Modifier.weight(1f)) {
             Text(if (vm.isTestingConnection) "Connecting…" else "Test Connection")
