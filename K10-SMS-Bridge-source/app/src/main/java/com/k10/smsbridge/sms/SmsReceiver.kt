@@ -29,6 +29,7 @@ class SmsReceiver : BroadcastReceiver() {
                         val entity = it.toEntity()
                         if (Graph.database.transactions().insert(entity) != -1L) {
                             Graph.announcer.announceReceived(entity.amountMinor)
+                            Graph.notifier.notifyReceived(entity.amountMinor, entity.payerName, entity.uniqueLocalId)
                             enqueueSync(context)
                         }
                     }

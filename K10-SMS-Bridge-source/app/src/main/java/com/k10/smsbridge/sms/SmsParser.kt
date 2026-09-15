@@ -31,6 +31,12 @@ data class ParseResult(val transaction: ParsedSms?, val reason: String) {
 }
 
 object SmsParser {
+    private val creditSignal = Regex("\\b(received|credited|deposited)\\b", RegexOption.IGNORE_CASE)
+    private val accountReference = Regex(
+        "(?:a/c|acct|account)(?:\\s*(?:no\\.?|number))?[\\s.:*xX-]*(\\d{4})(?!\\d)",
+        RegexOption.IGNORE_CASE
+    )
+
     fun parse(sender: String, body: String, receivedAt: Long, rules: RuleConfig): ParseResult {
         if (!rules.enabled) return ParseResult(null, "Matching rules are disabled")
         val normalizedSender = sender.trim().uppercase()
@@ -38,8 +44,8 @@ object SmsParser {
         if (!RuleValidator.hasImmutableCreditSignal(body)) return ParseResult(null, "Message is not a credit transaction")
         if (rules.excludedKeywords.any { body.contains(it, true) }) return ParseResult(null, "Message contains an excluded term")
         if (rules.requiredKeywords.none { body.contains(it, true) }) return ParseResult(null, "A required credit keyword is missing")
-        if (!Regex("(?<!\\d)${Regex.escape(rules.accountLast4)}(?!\\d)").containsMatchIn(body)) {
-            return ParseResult(null, "Configured account digits are missing")
+        if (!hasExpectedDestinationAccount(body, rules.accountLast4)) {
+            return ParseResult(null, "Configured account is not the receiving account")
         }
 
         val amountText = captureFromTemplates(body, rules.amountPatterns, "{amount}", "[0-9][0-9,]*(?:\\.[0-9]{1,2})?")
@@ -74,9 +80,32 @@ object SmsParser {
     }
 
     fun isFinanciallyScopedCandidate(sender: String, body: String, rules: RuleConfig): Boolean =
-        body.contains(rules.accountLast4) &&
+        hasExpectedDestinationAccount(body, rules.accountLast4) &&
             RuleValidator.hasImmutableCreditSignal(body) &&
             !RuleValidator.hasImmutableExclusion(body)
+
+    /** Requires the expected account to be the destination nearest the credit signal, not a source account. */
+    internal fun hasExpectedDestinationAccount(body: String, expectedLast4: String): Boolean {
+        for (credit in creditSignal.findAll(body)) {
+            val after = accountReference.find(body, credit.range.last + 1)
+            if (after != null && after.range.first - credit.range.last <= 90) {
+                val connector = body.substring(credit.range.last + 1, after.range.first).trim().lowercase()
+                if (!Regex("(?:^|\\s)(?:from|by)\\s*$").containsMatchIn(connector)) {
+                    return after.groupValues[1] == expectedLast4
+                }
+            }
+
+            val beforeText = body.substring(0, credit.range.first)
+            val before = accountReference.findAll(beforeText).lastOrNull()
+            if (before != null && credit.range.first - before.range.last <= 90) {
+                val sourcePrefix = beforeText.substring((before.range.first - 12).coerceAtLeast(0), before.range.first)
+                if (!Regex("(?:from|by)\\s*$", RegexOption.IGNORE_CASE).containsMatchIn(sourcePrefix)) {
+                    return before.groupValues[1] == expectedLast4
+                }
+            }
+        }
+        return false
+    }
 
     private fun safeAmountFallback(body: String): String? {
         val amount = "([0-9][0-9,]*(?:\\.[0-9]{1,2})?)"
