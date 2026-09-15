@@ -10,8 +10,9 @@ import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
-class SecureTokenStore(context: Context) {
-    private val prefs = context.getSharedPreferences("secure_device_credentials", Context.MODE_PRIVATE)
+class SecureTokenStore(context: Context, private val namespace: String = "bridge") {
+    private val prefs = context.getSharedPreferences(if (namespace == "bridge") "secure_device_credentials" else "secure_device_credentials_$namespace", Context.MODE_PRIVATE)
+    private val alias = if (namespace == "bridge") "k10_sms_bridge_device_token" else "k10_secure_token_$namespace"
     private val keyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
 
     fun save(token: String) {
@@ -39,10 +40,10 @@ class SecureTokenStore(context: Context) {
     }
 
     private fun getOrCreateKey(): SecretKey {
-        (keyStore.getKey(ALIAS, null) as? SecretKey)?.let { return it }
+        (keyStore.getKey(alias, null) as? SecretKey)?.let { return it }
         return KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore").run {
             init(
-                KeyGenParameterSpec.Builder(ALIAS, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
+                KeyGenParameterSpec.Builder(alias, KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT)
                     .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
                     .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
                     .build()
@@ -52,7 +53,6 @@ class SecureTokenStore(context: Context) {
     }
 
     companion object {
-        private const val ALIAS = "k10_sms_bridge_device_token"
         private const val TRANSFORMATION = "AES/GCM/NoPadding"
     }
 }
