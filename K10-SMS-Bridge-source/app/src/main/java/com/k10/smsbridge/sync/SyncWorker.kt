@@ -4,11 +4,15 @@ import android.content.Context
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import com.k10.smsbridge.Graph
+import com.k10.smsbridge.sms.SmsInboxCatchUp
 
 class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
     override suspend fun doWork(): Result {
         val settings = Graph.rules.settings()
-        if (!settings.serviceEnabled || settings.backendUrl.isBlank()) return Result.success()
+        if (!settings.serviceEnabled) return Result.success()
+
+        SmsInboxCatchUp.importMissed(applicationContext, Graph.rules.current(), Graph.database.transactions())
+        if (settings.backendUrl.isBlank()) return Result.success()
         val token = Graph.tokenStore.load()
         if (token.isBlank()) return Result.success()
 
@@ -40,5 +44,6 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
     companion object {
         const val PERIODIC_NAME = "k10-periodic-rules-and-sync"
         const val IMMEDIATE_NAME = "k10-immediate-transaction-sync"
+        const val STARTUP_NAME = "k10-startup-catch-up-and-sync"
     }
 }

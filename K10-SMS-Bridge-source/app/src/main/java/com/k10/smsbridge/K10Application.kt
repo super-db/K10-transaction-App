@@ -3,7 +3,9 @@ package com.k10.smsbridge
 import android.app.Application
 import androidx.work.Constraints
 import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
+import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import com.k10.smsbridge.data.AppDatabase
@@ -19,13 +21,19 @@ class K10Application : Application() {
     override fun onCreate() {
         super.onCreate()
         Graph.init(this)
-        val request = PeriodicWorkRequestBuilder<SyncWorker>(6, TimeUnit.HOURS)
-            .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
+        val constraints = Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()
+        val request = PeriodicWorkRequestBuilder<SyncWorker>(15, TimeUnit.MINUTES)
+            .setConstraints(constraints)
             .build()
         WorkManager.getInstance(this).enqueueUniquePeriodicWork(
             SyncWorker.PERIODIC_NAME,
             ExistingPeriodicWorkPolicy.UPDATE,
             request
+        )
+        WorkManager.getInstance(this).enqueueUniqueWork(
+            SyncWorker.STARTUP_NAME,
+            ExistingWorkPolicy.REPLACE,
+            OneTimeWorkRequestBuilder<SyncWorker>().setConstraints(constraints).build()
         )
     }
 }

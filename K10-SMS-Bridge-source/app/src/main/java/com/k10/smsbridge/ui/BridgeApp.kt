@@ -2,10 +2,14 @@ package com.k10.smsbridge.ui
 
 import android.Manifest
 import android.content.pm.PackageManager
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -61,29 +65,31 @@ private enum class Screen { HOME, LOG, SEARCH, SETTINGS }
 fun BridgeApp(vm: BridgeViewModel = viewModel()) {
     var screen by remember { mutableStateOf(Screen.HOME) }
     val snackbarHostState = remember { SnackbarHostState() }
+    BackHandler(enabled = screen != Screen.HOME) { screen = Screen.HOME }
     LaunchedEffect(vm.messageVersion) {
         if (vm.messageVersion > 0 && vm.message.isNotBlank()) snackbarHostState.showSnackbar(vm.message)
     }
     Scaffold(snackbarHost = { SnackbarHost(snackbarHostState) }) { padding ->
-        val scrollState = rememberScrollState()
-        LaunchedEffect(screen) { scrollState.scrollTo(0) }
-        val pageModifier = Modifier
-            .fillMaxSize()
-            .padding(padding)
-            .padding(16.dp)
-            .then(
-                if (screen == Screen.HOME || screen == Screen.SETTINGS) {
-                    Modifier.verticalScroll(scrollState)
-                } else {
-                    Modifier
+        Crossfade(targetState = screen, label = "K10 page transition") { currentScreen ->
+            val scrollState = rememberScrollState()
+            val pageModifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .padding(horizontal = 16.dp, vertical = 12.dp)
+                .then(
+                    if (currentScreen == Screen.HOME || currentScreen == Screen.SETTINGS) {
+                        Modifier.verticalScroll(scrollState)
+                    } else {
+                        Modifier
+                    }
+                )
+            Column(pageModifier.animateContentSize()) {
+                when (currentScreen) {
+                    Screen.HOME -> HomeScreen(vm, { screen = Screen.LOG }, { screen = Screen.SEARCH }, { screen = Screen.SETTINGS })
+                    Screen.LOG -> TransactionLog(vm) { screen = Screen.HOME }
+                    Screen.SEARCH -> SearchSmsScreen(vm) { screen = Screen.HOME }
+                    Screen.SETTINGS -> SettingsScreen(vm) { screen = Screen.HOME }
                 }
-            )
-        Column(pageModifier) {
-            when (screen) {
-                Screen.HOME -> HomeScreen(vm, { screen = Screen.LOG }, { screen = Screen.SEARCH }, { screen = Screen.SETTINGS })
-                Screen.LOG -> TransactionLog(vm) { screen = Screen.HOME }
-                Screen.SEARCH -> SearchSmsScreen(vm) { screen = Screen.HOME }
-                Screen.SETTINGS -> SettingsScreen(vm) { screen = Screen.HOME }
             }
         }
     }
@@ -100,6 +106,7 @@ private fun HomeScreen(vm: BridgeViewModel, openLog: () -> Unit, openSearch: () 
     }
     val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
         permissionGranted = it[Manifest.permission.RECEIVE_SMS] == true && it[Manifest.permission.READ_SMS] == true
+        if (permissionGranted) vm.syncNow()
     }
     val pending by vm.pendingCount.collectAsState(0)
     val failed by vm.failedCount.collectAsState(0)
@@ -157,14 +164,14 @@ private fun HomeScreen(vm: BridgeViewModel, openLog: () -> Unit, openSearch: () 
     Spacer(Modifier.height(16.dp))
     if (!permissionGranted) Button(onClick = { permissionLauncher.launch(arrayOf(Manifest.permission.RECEIVE_SMS, Manifest.permission.READ_SMS)) }) { Text("Grant SMS Permission") }
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Button(onClick = { vm.testConnection() }, enabled = !vm.isTestingConnection) {
+        Button(onClick = { vm.testConnection() }, enabled = !vm.isTestingConnection, modifier = Modifier.weight(1f)) {
             Text(if (vm.isTestingConnection) "Connecting…" else "Test Connection")
         }
-        OutlinedButton(onClick = vm::syncNow) { Text("Retry / Sync") }
+        OutlinedButton(onClick = vm::syncNow, modifier = Modifier.weight(1f)) { Text("Retry / Sync") }
     }
-    OutlinedButton(onClick = openSearch, modifier = Modifier.fillMaxWidth()) { Text("Search SMS") }
-    OutlinedButton(onClick = openLog, modifier = Modifier.fillMaxWidth()) { Text("All Transactions") }
-    OutlinedButton(onClick = openSettings, modifier = Modifier.fillMaxWidth()) { Text("Settings") }
+    OutlinedButton(onClick = openSearch, modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) { Text("Scan existing SMS") }
+    OutlinedButton(onClick = openLog, modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) { Text("All Transactions") }
+    OutlinedButton(onClick = openSettings, modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) { Text("Settings") }
 }
 
 @Composable
@@ -184,8 +191,12 @@ private fun TransactionLog(vm: BridgeViewModel, back: () -> Unit) {
     Text("Only eligible transactions detected or imported by K10 are shown.")
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         listOf("Today", "15d", "30d", "All").forEach { option ->
-            OutlinedButton(onClick = { range = option }, modifier = Modifier.weight(1f)) {
-                Text(if (option == "All") "Lifetime" else option)
+            OutlinedButton(
+                onClick = { range = option },
+                modifier = Modifier.weight(1f),
+                contentPadding = PaddingValues(horizontal = 4.dp, vertical = 10.dp)
+            ) {
+                Text(if (option == "All") "All" else option, maxLines = 1)
             }
         }
     }
@@ -241,20 +252,23 @@ private fun SearchSmsScreen(vm: BridgeViewModel, back: () -> Unit) {
     var eligibleOnly by remember { mutableStateOf(true) }
     val today = LocalDate.now()
 
-    Header("Search SMS", back)
-    Text("Search runs only on this phone. Results are never uploaded until you choose Import.")
+    Header("Scan existing SMS", back)
+    Text("New incoming transactions are captured and synced automatically. Use this screen to recover older messages.")
     LazyColumn(Modifier.fillMaxSize()) {
         item {
+            Spacer(Modifier.height(12.dp))
             Text("Quick range", fontWeight = FontWeight.SemiBold)
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                OutlinedButton(onClick = { from = today.toString(); to = today.toString() }, modifier = Modifier.weight(1f)) { Text("Today") }
-                OutlinedButton(onClick = { from = today.minusDays(14).toString(); to = today.toString() }, modifier = Modifier.weight(1f)) { Text("15d") }
-                OutlinedButton(onClick = { from = today.minusDays(29).toString(); to = today.toString() }, modifier = Modifier.weight(1f)) { Text("30d") }
-                OutlinedButton(onClick = { from = "2000-01-01"; to = today.toString() }, modifier = Modifier.weight(1f)) { Text("All") }
+            Row(Modifier.fillMaxWidth().padding(top = 4.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                RangeButton("Today", Modifier.weight(1f)) { from = today.toString(); to = today.toString() }
+                RangeButton("15d", Modifier.weight(1f)) { from = today.minusDays(14).toString(); to = today.toString() }
+                RangeButton("30d", Modifier.weight(1f)) { from = today.minusDays(29).toString(); to = today.toString() }
+                RangeButton("All", Modifier.weight(1f)) { from = "2000-01-01"; to = today.toString() }
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Field(from, { from = it }, "Date From (YYYY-MM-DD)", Modifier.weight(1f))
-                Field(to, { to = it }, "Date To (YYYY-MM-DD)", Modifier.weight(1f))
+            Spacer(Modifier.height(12.dp))
+            Text("Date range (YYYY-MM-DD)", style = MaterialTheme.typography.labelMedium)
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Field(from, { from = it }, "From", Modifier.weight(1f))
+                Field(to, { to = it }, "To", Modifier.weight(1f))
             }
             Field(sender, { sender = it }, "Sender (optional)")
             Field(account, { account = it.filter(Char::isDigit).take(4) }, "Account last4")
@@ -270,11 +284,11 @@ private fun SearchSmsScreen(vm: BridgeViewModel, back: () -> Unit) {
                     val end = runCatching { LocalDate.parse(to).plusDays(1).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli() - 1 }.getOrDefault(System.currentTimeMillis())
                     vm.search(SmsSearchFilters(start, end, sender, account, credit, rawText, eligibleOnly))
                 }
-            }, enabled = !vm.isSearching) {
+            }, enabled = !vm.isSearching, modifier = Modifier.fillMaxWidth().padding(top = 4.dp)) {
                 Text(when {
                     !canRead -> "Grant permission"
                     vm.isSearching -> "Searching…"
-                    else -> "Search on device"
+                    else -> "Find transactions"
                 })
             }
             Text("Sender is optional. Account digits and at least one credit keyword must match. OTP, debit and promotional messages remain blocked.", style = MaterialTheme.typography.bodySmall)
@@ -289,7 +303,9 @@ private fun SearchSmsScreen(vm: BridgeViewModel, back: () -> Unit) {
                 Spacer(Modifier.height(8.dp))
             }
             if (vm.searchResults.any { it.parseResult.eligible && !it.alreadyAdded }) {
-                OutlinedButton(onClick = vm::importAll) { Text("Import All Eligible") }
+                Button(onClick = vm::importAll, modifier = Modifier.fillMaxWidth()) {
+                    Text("Save & Sync all eligible")
+                }
             }
         }
         items(vm.searchResults) { item -> SearchResultCard(item) { vm.import(item) } }
@@ -308,10 +324,10 @@ private fun SearchResultCard(item: SmsSearchItem, import: () -> Unit) {
                 Text("A/c xx${it.accountLast4}")
             }
             when {
-                item.alreadyAdded -> Text("Already added ✓")
+                item.alreadyAdded -> Text("Saved and queued/synced ✓")
                 tx != null -> {
-                    Text("Eligible — Ready to import")
-                    Button(onClick = import) { Text("Import") }
+                    Text("Eligible — not yet saved")
+                    Button(onClick = import) { Text("Save & Sync") }
                 }
                 else -> Text("Not eligible: ${item.parseResult.reason}")
             }
@@ -368,7 +384,8 @@ private fun SettingsScreen(vm: BridgeViewModel, back: () -> Unit) {
 @Composable
 private fun Header(title: String, back: () -> Unit) {
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        TextButton(onClick = back) { Text("Back") }
+        TextButton(onClick = back, contentPadding = PaddingValues(horizontal = 4.dp, vertical = 8.dp)) { Text("‹ Back") }
+        Spacer(Modifier.height(0.dp).weight(0.04f))
         Text(title, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
     }
     Spacer(Modifier.height(8.dp))
@@ -384,7 +401,16 @@ private fun InfoRow(label: String, value: String) {
 
 @Composable
 private fun Field(value: String, change: (String) -> Unit, label: String, modifier: Modifier = Modifier.fillMaxWidth()) {
-    OutlinedTextField(value, change, label = { Text(label) }, singleLine = true, modifier = modifier)
+    OutlinedTextField(value, change, label = { Text(label, maxLines = 1) }, singleLine = true, modifier = modifier.padding(vertical = 4.dp))
+}
+
+@Composable
+private fun RangeButton(label: String, modifier: Modifier, action: () -> Unit) {
+    OutlinedButton(
+        onClick = action,
+        modifier = modifier,
+        contentPadding = PaddingValues(horizontal = 4.dp, vertical = 10.dp)
+    ) { Text(label, maxLines = 1) }
 }
 
 private fun formatMoney(minor: Long): String = NumberFormat.getCurrencyInstance(Locale("en", "IN")).format(minor / 100.0)
