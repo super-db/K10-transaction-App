@@ -33,7 +33,17 @@ class BridgeViewModel(app: Application) : AndroidViewModel(app) {
         private set
     var message: String by androidx.compose.runtime.mutableStateOf("")
         private set
+    var messageVersion: Int by androidx.compose.runtime.mutableIntStateOf(0)
+        private set
     var connectionOk: Boolean? by androidx.compose.runtime.mutableStateOf<Boolean?>(null)
+        private set
+    var isSaving: Boolean by androidx.compose.runtime.mutableStateOf(false)
+        private set
+    var isTestingConnection: Boolean by androidx.compose.runtime.mutableStateOf(false)
+        private set
+    var isSearching: Boolean by androidx.compose.runtime.mutableStateOf(false)
+        private set
+    var hasSearched: Boolean by androidx.compose.runtime.mutableStateOf(false)
         private set
 
     private val searchRepository = SmsSearchRepository(app, Graph.database.transactions())
@@ -44,22 +54,31 @@ class BridgeViewModel(app: Application) : AndroidViewModel(app) {
     fun token() = Graph.tokenStore.load()
 
     fun saveSettings(url: String, token: String, enabled: Boolean, accountLast4: String, senderIds: String) {
+        if (isSaving) return
+        isSaving = true
         runCatching {
             Graph.rules.saveSettings(BridgeSettings(url, enabled), accountLast4, senderIds.split(','))
             Graph.tokenStore.save(token)
-        }.onSuccess { message = "Settings saved" }
-            .onFailure { message = it.message ?: "Could not save settings" }
+        }.onSuccess { notifyUser("Settings saved securely") }
+            .onFailure { notifyUser(it.message ?: "Could not save settings") }
+        isSaving = false
     }
 
     fun testConnection(url: String = settings().backendUrl, token: String = token()) {
+        if (isTestingConnection) return
         viewModelScope.launch {
             if (url.isBlank()) {
-                message = "Set the HTTPS backend URL first"
+                notifyUser("Set the HTTPS backend URL first")
                 connectionOk = false
                 return@launch
             }
-            connectionOk = BackendClient.test(url.trimEnd('/'), token)
-            message = if (connectionOk == true) "Backend connected" else "Backend connection failed"
+            isTestingConnection = true
+            try {
+                connectionOk = BackendClient.test(url.trimEnd('/'), token)
+                notifyUser(if (connectionOk == true) "Backend connected" else "Backend connection failed")
+            } finally {
+                isTestingConnection = false
+            }
         }
     }
 
@@ -72,24 +91,31 @@ class BridgeViewModel(app: Application) : AndroidViewModel(app) {
             ExistingWorkPolicy.APPEND_OR_REPLACE,
             request
         )
-        message = "Rules and pending transactions queued for sync"
+        notifyUser("Rules and pending transactions queued for sync")
     }
 
     fun search(filters: SmsSearchFilters) {
+        if (isSearching) return
         viewModelScope.launch {
+            isSearching = true
             runCatching { searchRepository.search(filters, rules()) }
                 .onSuccess {
                     searchResults = it
-                    message = "${it.size} matching candidate(s) found"
+                    hasSearched = true
+                    notifyUser(if (it.isEmpty()) "No matching transactions found" else "${it.size} matching transaction(s) found")
                 }
-                .onFailure { message = it.message ?: "Search failed" }
+                .onFailure {
+                    hasSearched = true
+                    notifyUser(it.message ?: "Search failed")
+                }
+            isSearching = false
         }
     }
 
     fun import(item: SmsSearchItem) {
         viewModelScope.launch {
             val added = searchRepository.import(item, rules())
-            message = if (added) "Eligible transaction imported" else "Already added"
+            notifyUser(if (added) "Eligible transaction imported" else "Already added")
             if (added) {
                 searchResults = searchResults.map { if (it === item) it.copy(alreadyAdded = true) else it }
                 syncNow()
@@ -106,8 +132,13 @@ class BridgeViewModel(app: Application) : AndroidViewModel(app) {
             searchResults = searchResults.map { item ->
                 if (item.parseResult.eligible) item.copy(alreadyAdded = true) else item
             }
-            message = if (added == 0) "No new eligible transactions" else "$added transaction(s) imported"
+            notifyUser(if (added == 0) "No new eligible transactions" else "$added transaction(s) imported")
             if (added > 0) syncNow()
         }
+    }
+
+    private fun notifyUser(value: String) {
+        message = value
+        messageVersion++
     }
 }
