@@ -34,10 +34,9 @@ class SmsParserTest {
     @Test fun rejectsWrongAccount() = assertRejected("Rs 2000 received in A/c xx1234 on 2 Sep from A Person via UPI.")
 
     @Test
-    fun rejectsUnapprovedSenderEvenIfRemoteListContainsIt() {
-        val unsafe = RuleConfig.DEFAULT.copy(allowedSenderIds = listOf("FRIEND"))
-        val result = SmsParser.parse("FRIEND", "Rs 2000 received in A/c xx7972 on 2 Sep from A Person via UPI.", receivedAt, unsafe)
-        assertFalse(result.eligible)
+    fun acceptsUnlistedSenderWhenFinancialSafeguardsMatch() {
+        val result = SmsParser.parse("AX-BANK", "Rs 2000 received in A/c xx7972 on 2 Sep from A Person via UPI.", receivedAt, RuleConfig.DEFAULT)
+        assertTrue(result.reason, result.eligible)
     }
 
     @Test
@@ -49,6 +48,25 @@ class SmsParserTest {
             RuleConfig.DEFAULT
         )
         assertTrue(result.reason, result.eligible)
+    }
+
+    @Test
+    fun acceptsCreditedWordingAndUsesSmsDateWhenTransactionDateIsAbsent() {
+        val result = SmsParser.parse(
+            "AX-BANK",
+            "INR 2,000 credited to A/c XX7972 via UPI.",
+            receivedAt,
+            RuleConfig.DEFAULT
+        )
+        assertTrue(result.reason, result.eligible)
+        assertEquals(200_000, result.transaction?.amountMinor)
+        assertEquals("2026-09-06", result.transaction?.transactionDate.toString())
+    }
+
+    @Test
+    fun rejectsCasualMessageEvenWithAccountAndCreditWords() {
+        val result = SmsParser.parse("FRIEND", "I received the account 7972 notes", receivedAt, RuleConfig.DEFAULT)
+        assertFalse(result.eligible)
     }
 
     @Test
