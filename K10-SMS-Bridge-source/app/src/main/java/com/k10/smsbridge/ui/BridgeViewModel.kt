@@ -144,7 +144,7 @@ class BridgeViewModel(app: Application) : AndroidViewModel(app) {
     fun import(item: SmsSearchItem) {
         viewModelScope.launch {
             val added = searchRepository.import(item, rules())
-            notifyUser(if (added) "Eligible transaction imported" else "Already added")
+            notifyUser(if (added) "Transaction saved and queued for sync" else "Already saved")
             if (added) {
                 searchResults = searchResults.map { if (it === item) it.copy(alreadyAdded = true) else it }
                 syncNow()
@@ -161,7 +161,7 @@ class BridgeViewModel(app: Application) : AndroidViewModel(app) {
             searchResults = searchResults.map { item ->
                 if (item.parseResult.eligible) item.copy(alreadyAdded = true) else item
             }
-            notifyUser(if (added == 0) "No new eligible transactions" else "$added transaction(s) imported")
+            notifyUser(if (added == 0) "No new eligible transactions" else "$added transaction(s) saved and queued for sync")
             if (added > 0) syncNow()
         }
     }
