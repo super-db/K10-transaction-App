@@ -10,6 +10,7 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import com.k10.smsbridge.data.AppDatabase
 import com.k10.smsbridge.notifications.TransactionNotifier
+import com.k10.smsbridge.mobile.MobileSessionStore
 import com.k10.smsbridge.rules.RuleStore
 import com.k10.smsbridge.security.SecureTokenStore
 import com.k10.smsbridge.sync.SyncWorker
@@ -45,6 +46,7 @@ object Graph {
     lateinit var tokenStore: SecureTokenStore
     lateinit var announcer: TransactionAnnouncer
     lateinit var notifier: TransactionNotifier
+    lateinit var mobileSession: MobileSessionStore
     val appScope = CoroutineScope(SupervisorJob())
 
     fun init(app: Application) {
@@ -53,5 +55,6 @@ object Graph {
         tokenStore = SecureTokenStore(app)
         announcer = TransactionAnnouncer(app)
         notifier = TransactionNotifier(app)
+        mobileSession = MobileSessionStore(app)
     }
 }
