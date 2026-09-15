@@ -12,6 +12,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.AlertDialog
@@ -56,7 +58,19 @@ private enum class Screen { HOME, LOG, SEARCH, SETTINGS }
 fun BridgeApp(vm: BridgeViewModel = viewModel()) {
     var screen by remember { mutableStateOf(Screen.HOME) }
     Scaffold { padding ->
-        Column(Modifier.fillMaxSize().padding(padding).padding(16.dp)) {
+        val scrollState = rememberScrollState()
+        val pageModifier = Modifier
+            .fillMaxSize()
+            .padding(padding)
+            .padding(16.dp)
+            .then(
+                if (screen == Screen.HOME || screen == Screen.SETTINGS) {
+                    Modifier.verticalScroll(scrollState)
+                } else {
+                    Modifier
+                }
+            )
+        Column(pageModifier) {
             when (screen) {
                 Screen.HOME -> HomeScreen(vm, { screen = Screen.LOG }, { screen = Screen.SEARCH }, { screen = Screen.SETTINGS })
                 Screen.LOG -> TransactionLog(vm) { screen = Screen.HOME }
@@ -94,8 +108,13 @@ private fun HomeScreen(vm: BridgeViewModel, openLog: () -> Unit, openSearch: () 
     val startOfToday = LocalDate.now().atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
     val receivedToday = transactions.filter { it.smsReceivedTimestamp >= startOfToday }.sumOf { it.amountMinor }
 
-    Text("K10 Pay", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
-    Text("Slice transaction assistant", color = MaterialTheme.colorScheme.onSurfaceVariant)
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+        Column(Modifier.weight(1f)) {
+            Text("K10 Pay", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+            Text("Slice transaction assistant", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        TextButton(onClick = openSettings) { Text("Settings") }
+    }
     Spacer(Modifier.height(16.dp))
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(20.dp)) {
