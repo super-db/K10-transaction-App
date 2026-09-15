@@ -8,7 +8,7 @@
     <application
         android:name=".K10Application"
         android:allowBackup="false"
-        android:label="K10 SMS Bridge"
+        android:label="K10 Pay"
         android:supportsRtl="true"
         android:theme="@style/Theme.K10SmsBridge"
         android:usesCleartextTraffic="false">
