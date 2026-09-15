@@ -34,6 +34,17 @@ class SmsParserTest {
     @Test fun rejectsWrongAccount() = assertRejected("Rs 2000 received in A/c xx1234 on 2 Sep from A Person via UPI.")
 
     @Test
+    fun rejectsExpectedAccountWhenItIsTheSendingAccount() = assertRejected(
+        "Rs. 400 received in A/c 5778 from A/c 7972 on 15-Sep-26. (Ref ID: 625800183145). Avl Bal Rs. 4,126.93. - slice"
+    )
+
+    @Test
+    fun acceptsExpectedAccountBeforeCreditedWording() {
+        val result = SmsParser.parse("SLICE", "Your A/c XX7972 has been credited with INR 400.00 via UPI.", receivedAt, RuleConfig.DEFAULT)
+        assertTrue(result.reason, result.eligible)
+    }
+
+    @Test
     fun acceptsUnlistedSenderWhenFinancialSafeguardsMatch() {
         val result = SmsParser.parse("AX-BANK", "Rs 2000 received in A/c xx7972 on 2 Sep from A Person via UPI.", receivedAt, RuleConfig.DEFAULT)
         assertTrue(result.reason, result.eligible)
