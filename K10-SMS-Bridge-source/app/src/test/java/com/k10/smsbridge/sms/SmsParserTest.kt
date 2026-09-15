@@ -59,7 +59,7 @@ class SmsParserTest {
             RuleConfig.DEFAULT
         )
         assertTrue(result.reason, result.eligible)
-        assertEquals(200_000, result.transaction?.amountMinor)
+        assertEquals(200_000L, result.transaction?.amountMinor)
         assertEquals("2026-09-06", result.transaction?.transactionDate.toString())
     }
 
