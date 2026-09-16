@@ -11,6 +11,7 @@ data class RuleConfig(
     val requiredKeywords: List<String>,
     val optionalKeywords: List<String>,
     val excludedKeywords: List<String>,
+    val excludedPayerNames: List<String>,
     val amountPatterns: List<String>,
     val payerPatterns: List<String>,
     val datePatterns: List<String>,
@@ -25,6 +26,7 @@ data class RuleConfig(
         put("required_keywords", JSONArray(requiredKeywords))
         put("optional_keywords", JSONArray(optionalKeywords))
         put("excluded_keywords", JSONArray(excludedKeywords))
+        put("excluded_payer_names", JSONArray(excludedPayerNames))
         put("amount_patterns", JSONArray(amountPatterns))
         put("payer_extraction_patterns", JSONArray(payerPatterns))
         put("date_extraction_patterns", JSONArray(datePatterns))
@@ -41,6 +43,7 @@ data class RuleConfig(
             requiredKeywords = listOf("received", "credited"),
             optionalKeywords = listOf("via UPI"),
             excludedKeywords = listOf("debited", "OTP"),
+            excludedPayerNames = listOf("Devasish Bhagawati"),
             amountPatterns = listOf(
                 "Rs {amount} received", "Rs. {amount} received", "INR {amount} received", "₹{amount} received",
                 "Rs {amount} credited", "Rs. {amount} credited", "INR {amount} credited", "₹{amount} credited"
@@ -59,6 +62,7 @@ data class RuleConfig(
             requiredKeywords = json.strings("required_keywords"),
             optionalKeywords = json.optStrings("optional_keywords"),
             excludedKeywords = json.strings("excluded_keywords"),
+            excludedPayerNames = json.optStrings("excluded_payer_names").ifEmpty { DEFAULT.excludedPayerNames },
             amountPatterns = json.strings("amount_patterns"),
             payerPatterns = json.optStrings("payer_extraction_patterns").ifEmpty { DEFAULT.payerPatterns },
             datePatterns = json.optStrings("date_extraction_patterns").ifEmpty { DEFAULT.datePatterns },
