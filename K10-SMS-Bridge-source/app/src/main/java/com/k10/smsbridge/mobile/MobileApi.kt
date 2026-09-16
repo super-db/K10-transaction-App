@@ -9,8 +9,9 @@ import java.net.URL
 
 data class MobileTransaction(val id:String,val payerName:String,val amount:Double?,val occurredAt:String,val paymentMethod:String,val status:String)
 data class AccountRequest(val id:String,val name:String,val phone:String,val email:String,val requestedAt:String)
-data class ManagedAccount(val id:String,val name:String,val phone:String,val email:String,val role:String,val active:Boolean,val passwordChangeRequired:Boolean)
+data class ManagedAccount(val id:String,val name:String,val phone:String,val email:String,val role:String,val historyTier:String,val active:Boolean,val passwordChangeRequired:Boolean)
 data class ApprovalInbox(val requests:List<AccountRequest>,val accounts:List<ManagedAccount>)
+data class AppUpdateInfo(val latestVersionCode:Int,val latestVersionName:String,val minimumSupportedVersionCode:Int,val mandatory:Boolean,val downloadUrl:String,val sha256:String,val releaseNotes:List<String>)
 
 object MobileApi{
     const val BASE_URL="https://finances.k10classes.com"
@@ -45,7 +46,7 @@ object MobileApi{
         val requests=json.optJSONArray("requests")?:JSONArray();val accounts=json.optJSONArray("accounts")?:JSONArray()
         ApprovalInbox(
             (0 until requests.length()).map{requests.getJSONObject(it)}.map{AccountRequest(it.getString("id"),it.getString("name"),it.getString("phone"),it.getString("email"),it.optString("requestedAt"))},
-            (0 until accounts.length()).map{accounts.getJSONObject(it)}.map{ManagedAccount(it.getString("id"),it.optString("name"),it.optString("phone"),it.optString("email"),it.optString("role"),it.optBoolean("active",true),it.optBoolean("passwordChangeRequired"))}
+            (0 until accounts.length()).map{accounts.getJSONObject(it)}.map{ManagedAccount(it.getString("id"),it.optString("name"),it.optString("phone"),it.optString("email"),it.optString("role"),it.optString("historyTier","today"),it.optBoolean("active",true),it.optBoolean("passwordChangeRequired"))}
         )
     }
     suspend fun review(session:MobileSession,requestId:String,approve:Boolean):String = withContext(Dispatchers.IO){
@@ -58,21 +59,41 @@ object MobileApi{
         val(code,body)=request("/api/mobile/passwords","POST",session.token,payload.toString());val json=json(body)
         if(code !in 200..299)error(json.optString("error","Staff password reset failed"));json.optString("message","Temporary password saved. Staff must change it at next sign-in.")
     }
+    suspend fun updateStaff(session:MobileSession,userId:String,role:String,historyTier:String,active:Boolean):String = withContext(Dispatchers.IO){
+        val payload=JSONObject().put("userId",userId).put("role",role).put("historyTier",historyTier).put("active",active)
+        val(code,body)=request("/api/mobile/account-requests","PATCH",session.token,payload.toString());val json=json(body)
+        if(code !in 200..299)error(json.optString("error","Could not update staff access"));json.optString("message","Staff access updated.")
+    }
     suspend fun transactions(session:MobileSession,range:String):List<MobileTransaction> = withContext(Dispatchers.IO){
         val(code,body)=request("/api/mobile/transactions?range=$range","GET",session.token,null);val json=json(body)
         if(code !in 200..299)error(json.optString("error","Could not load transactions"));val array=json.optJSONArray("transactions")?:JSONArray()
         (0 until array.length()).map{array.getJSONObject(it)}.map{MobileTransaction(it.getString("id"),it.optString("payerName","Unknown payer"),if(it.isNull("amount"))null else it.optDouble("amount"),it.optString("occurredAt"),it.optString("paymentMethod","UNKNOWN"),it.optString("status","new"))}
     }
-    suspend fun register(session:MobileSession,fcmToken:String,deviceId:String,bridge:Boolean)=withContext(Dispatchers.IO){val payload=JSONObject().put("fcmToken",fcmToken).put("deviceId",deviceId).put("appVersion","3.1.0").put("bridgeDevice",bridge);val(code,body)=request("/api/mobile/devices","POST",session.token,payload.toString());if(code !in 200..299)error(json(body).optString("error","Device registration failed"))}
+    suspend fun register(session:MobileSession,fcmToken:String,deviceId:String,bridge:Boolean)=withContext(Dispatchers.IO){val payload=JSONObject().put("fcmToken",fcmToken).put("deviceId",deviceId).put("appVersion","4.0.0").put("bridgeDevice",bridge);val(code,body)=request("/api/mobile/devices","POST",session.token,payload.toString());if(code !in 200..299)error(json(body).optString("error","Device registration failed"))}
     suspend fun unregister(session:MobileSession,deviceId:String)=withContext(Dispatchers.IO){request("/api/mobile/devices","DELETE",session.token,JSONObject().put("deviceId",deviceId).toString())}
     suspend fun exclusions(session:MobileSession):List<String> = withContext(Dispatchers.IO){val(code,body)=request("/api/mobile/exclusions","GET",session.token,null);val json=json(body);if(code !in 200..299)error(json.optString("error","Could not load exclusions"));val array=json.optJSONArray("names")?:JSONArray();(0 until array.length()).map{array.getString(it)}}
     suspend fun saveExclusions(session:MobileSession,names:List<String>):List<String> = withContext(Dispatchers.IO){val(code,body)=request("/api/mobile/exclusions","PUT",session.token,JSONObject().put("names",JSONArray(names)).toString());val json=json(body);if(code !in 200..299)error(json.optString("error","Could not save exclusions"));val array=json.optJSONArray("names")?:JSONArray();(0 until array.length()).map{array.getString(it)}}
+    suspend fun preferences(session:MobileSession):NotificationPreferences = withContext(Dispatchers.IO){
+        val(code,body)=request("/api/mobile/preferences","GET",session.token,null);val json=json(body)
+        if(code !in 200..299)error(json.optString("error","Could not load notification settings"));preferences(json.optJSONObject("preferences")?:JSONObject())
+    }
+    suspend fun savePreferences(session:MobileSession,value:NotificationPreferences):NotificationPreferences = withContext(Dispatchers.IO){
+        val payload=JSONObject().put("transactionAlerts",value.transactionAlerts).put("voiceAnnouncements",value.voiceAnnouncements).put("approvalAlerts",value.approvalAlerts)
+        val(code,body)=request("/api/mobile/preferences","PUT",session.token,payload.toString());val json=json(body)
+        if(code !in 200..299)error(json.optString("error","Could not save notification settings"));preferences(json.optJSONObject("preferences")?:JSONObject())
+    }
+    suspend fun appVersion():AppUpdateInfo = withContext(Dispatchers.IO){
+        val(code,body)=request("/api/mobile/app-version","GET",null,null);val json=json(body)
+        if(code !in 200..299)error(json.optString("error","Could not check for updates"));val notes=json.optJSONArray("releaseNotes")?:JSONArray()
+        AppUpdateInfo(json.optInt("latestVersionCode"),json.optString("latestVersionName"),json.optInt("minimumSupportedVersionCode"),json.optBoolean("mandatory"),json.optString("downloadUrl"),json.optString("sha256"),(0 until notes.length()).map{notes.optString(it)})
+    }
 
     private fun session(json:JSONObject):MobileSession{
         val user=json.getJSONObject("user")
         val permissions=user.optJSONArray("permissions")?:JSONArray()
-        return MobileSession(json.getString("token"),user.getString("loginId"),user.getString("displayName"),user.getString("role"),(0 until permissions.length()).map{permissions.getString(it)}.toSet(),user.optBoolean("passwordChangeRequired"))
+        return MobileSession(json.getString("token"),user.getString("id"),user.getString("loginId"),user.getString("displayName"),user.getString("role"),user.optString("historyTier","today"),(0 until permissions.length()).map{permissions.getString(it)}.toSet(),user.optBoolean("passwordChangeRequired"),preferences(user.optJSONObject("notificationPreferences")?:JSONObject()))
     }
+    private fun preferences(json:JSONObject)=NotificationPreferences(json.optBoolean("transactionAlerts",true),json.optBoolean("voiceAnnouncements",true),json.optBoolean("approvalAlerts",false))
     private fun json(body:String)=runCatching{JSONObject(body)}.getOrElse{JSONObject().put("error","Server returned an invalid response. Please try again.")}
     private fun request(path:String,method:String,token:String?,body:String?):Pair<Int,String>{val connection=(URL(BASE_URL+path).openConnection() as HttpURLConnection).apply{requestMethod=method;connectTimeout=15_000;readTimeout=20_000;setRequestProperty("Accept","application/json");if(token!=null)setRequestProperty("Authorization","Bearer $token");if(body!=null){doOutput=true;setRequestProperty("Content-Type","application/json");outputStream.use{it.write(body.toByteArray())}}};return try{val code=connection.responseCode;val stream=if(code in 200..399)connection.inputStream else connection.errorStream;code to(stream?.bufferedReader()?.use{it.readText()}?:"")}finally{connection.disconnect()}}
 }

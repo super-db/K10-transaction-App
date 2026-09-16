@@ -28,8 +28,13 @@ class SmsReceiver : BroadcastReceiver() {
                     SmsParser.parse(sender, body, received, Graph.rules.current()).transaction?.let {
                         val entity = it.toEntity()
                         if (Graph.database.transactions().insert(entity) != -1L) {
-                            Graph.announcer.announceReceived(entity.amountMinor)
-                            Graph.notifier.notifyReceived(entity.amountMinor, entity.payerName, entity.uniqueLocalId)
+                            val preferences = Graph.mobileSession.load()?.notificationPreferences
+                            if (!it.payerExcluded && preferences?.voiceAnnouncements != false) {
+                                Graph.announcer.announceReceived(entity.amountMinor)
+                            }
+                            if (!it.payerExcluded && preferences?.transactionAlerts != false) {
+                                Graph.notifier.notifyReceived(entity.amountMinor, entity.payerName, entity.uniqueLocalId)
+                            }
                             enqueueSync(context)
                         }
                     }

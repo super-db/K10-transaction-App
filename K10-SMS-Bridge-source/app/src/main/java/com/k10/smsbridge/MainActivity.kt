@@ -3,6 +3,7 @@ package com.k10.smsbridge
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.core.view.WindowCompat
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -14,32 +15,37 @@ import com.k10.smsbridge.ui.K10PayApp
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        WindowCompat.setDecorFitsSystemWindows(window, false)
         setContent {
             val prefs = remember { getSharedPreferences("k10_pay_appearance", MODE_PRIVATE) }
             val systemDark = isSystemInDarkTheme()
-            var dark by remember { mutableStateOf(prefs.getBoolean("dark_mode", systemDark)) }
+            var mode by remember { mutableStateOf(ThemeMode.valueOf(prefs.getString("theme_mode", null) ?: if (prefs.contains("dark_mode")) if (prefs.getBoolean("dark_mode", systemDark)) "DARK" else "LIGHT" else "SYSTEM")) }
+            val dark = when(mode){ThemeMode.SYSTEM->systemDark;ThemeMode.LIGHT->false;ThemeMode.DARK->true}
             SmoothK10Theme(dark) {
-                K10PayApp(darkMode = dark, onToggleTheme = {
-                    dark = !dark
-                    prefs.edit().putBoolean("dark_mode", dark).apply()
-                })
+                K10PayApp(darkMode=dark,themeMode=mode,onThemeModeChange={value->mode=value;prefs.edit().putString("theme_mode",value.name).apply()})
             }
         }
     }
 }
 
+enum class ThemeMode { SYSTEM, LIGHT, DARK }
+
 @Composable
 private fun SmoothK10Theme(dark:Boolean, content:@Composable ()->Unit){
     val target=if(dark) darkColorScheme(
-        primary=Color(0xFFB9A4FF),onPrimary=Color(0xFF2D1268),
-        background=Color(0xFF121018),onBackground=Color(0xFFEAE6F0),
-        surface=Color(0xFF1B1822),onSurface=Color(0xFFEAE6F0),
-        surfaceVariant=Color(0xFF2B2634),onSurfaceVariant=Color(0xFFD0C8D8)
+        primary=Color(0xFFAEC6FF),onPrimary=Color(0xFF092F6B),
+        primaryContainer=Color(0xFF28456F),onPrimaryContainer=Color(0xFFD8E5FF),
+        secondary=Color(0xFFC0AFFF),secondaryContainer=Color(0xFF423671),
+        background=Color(0xFF0E1118),onBackground=Color(0xFFE7EAF2),
+        surface=Color(0xFF161A23),onSurface=Color(0xFFE7EAF2),
+        surfaceVariant=Color(0xFF232A37),onSurfaceVariant=Color(0xFFC3CBD9)
     ) else lightColorScheme(
-        primary=Color(0xFF6750A4),onPrimary=Color.White,
-        background=Color(0xFFFFF9FF),onBackground=Color(0xFF1D1B20),
-        surface=Color(0xFFFFF9FF),onSurface=Color(0xFF1D1B20),
-        surfaceVariant=Color(0xFFE9E2EC),onSurfaceVariant=Color(0xFF49454F)
+        primary=Color(0xFF1459B8),onPrimary=Color.White,
+        primaryContainer=Color(0xFFD8E5FF),onPrimaryContainer=Color(0xFF002E69),
+        secondary=Color(0xFF6750A4),secondaryContainer=Color(0xFFEADDFF),
+        background=Color(0xFFF8FAFF),onBackground=Color(0xFF121722),
+        surface=Color(0xFFFFFFFF),onSurface=Color(0xFF121722),
+        surfaceVariant=Color(0xFFECF1FA),onSurfaceVariant=Color(0xFF465165)
     )
     @Composable fun animated(value:Color)=animateColorAsState(value,tween(350),label="theme").value
     MaterialTheme(colorScheme=target.copy(

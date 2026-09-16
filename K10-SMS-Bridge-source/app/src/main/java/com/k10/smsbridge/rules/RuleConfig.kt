@@ -43,7 +43,7 @@ data class RuleConfig(
             requiredKeywords = listOf("received", "credited"),
             optionalKeywords = listOf("via UPI"),
             excludedKeywords = listOf("debited", "OTP"),
-            excludedPayerNames = listOf("Devasish Bhagawati"),
+            excludedPayerNames = emptyList(),
             amountPatterns = listOf(
                 "Rs {amount} received", "Rs. {amount} received", "INR {amount} received", "₹{amount} received",
                 "Rs {amount} credited", "Rs. {amount} credited", "INR {amount} credited", "₹{amount} credited"
@@ -62,7 +62,7 @@ data class RuleConfig(
             requiredKeywords = json.strings("required_keywords"),
             optionalKeywords = json.optStrings("optional_keywords"),
             excludedKeywords = json.strings("excluded_keywords"),
-            excludedPayerNames = json.optStrings("excluded_payer_names").ifEmpty { DEFAULT.excludedPayerNames },
+            excludedPayerNames = json.optStrings("excluded_payer_names"),
             amountPatterns = json.strings("amount_patterns"),
             payerPatterns = json.optStrings("payer_extraction_patterns").ifEmpty { DEFAULT.payerPatterns },
             datePatterns = json.optStrings("date_extraction_patterns").ifEmpty { DEFAULT.datePatterns },
