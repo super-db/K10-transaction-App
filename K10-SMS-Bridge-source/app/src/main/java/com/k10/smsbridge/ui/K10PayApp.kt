@@ -93,7 +93,7 @@ private fun SettingsScreen(vm:MobileViewModel,themeMode:ThemeMode,onThemeModeCha
     Scaffold(topBar={AppBar("Settings",back)}){padding->
         LazyColumn(Modifier.fillMaxSize().padding(padding),contentPadding=PaddingValues(16.dp),verticalArrangement=Arrangement.spacedBy(14.dp)){
             item{SettingsCard("Account & security","Your K10 Pay account is independent from the Finance Dashboard."){
-                SettingsAction("Change my password",passwords)
+                SettingsAction("Change my password",onClick=passwords)
                 SettingsAction("Recovery email","Registered during signup"){}
                 SettingsAction("Sign out"){vm.logout()}
             }}
@@ -101,7 +101,7 @@ private fun SettingsScreen(vm:MobileViewModel,themeMode:ThemeMode,onThemeModeCha
                 SettingsValue("Role",roleName(session.role))
                 SettingsValue("History",historyName(session.historyTier))
                 SettingsValue("Amounts","Visible")
-                if(session.developer)SettingsAction("Manage staff roles & history",roles)
+                if(session.developer)SettingsAction("Manage staff roles & history",onClick=roles)
             }}
             item{SettingsCard("Notifications","These switches control this account on every registered phone."){
                 ToggleSetting("Transaction alerts",preferences.transactionAlerts){vm.savePreferences(preferences.copy(transactionAlerts=it))}
@@ -112,8 +112,8 @@ private fun SettingsScreen(vm:MobileViewModel,themeMode:ThemeMode,onThemeModeCha
                 Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(6.dp)){ThemeMode.values().forEach{mode->FilterChip(selected=themeMode==mode,onClick={onThemeModeChange(mode)},label={Text(mode.name.lowercase().replaceFirstChar(Char::uppercase))},modifier=Modifier.weight(1f))}}
             }}
             if(session.developer)item{SettingsCard("Transaction collection","Rules remain strict for destination account xx7972."){
-                SettingsAction("Excluded payer names",exclusions)
-                SettingsAction("SMS bridge & matching rules",bridge)
+                SettingsAction("Excluded payer names",onClick=exclusions)
+                SettingsAction("SMS bridge & matching rules",onClick=bridge)
             }}
             item{SettingsCard("App updates","Secure updates are checked from the K10 Pay server."){
                 vm.availableUpdate?.let{Text("Version ${it.latestVersionName} is available",fontWeight=FontWeight.Bold);Button(vm::downloadUpdate,enabled=!vm.busy,modifier=Modifier.fillMaxWidth().padding(top=8.dp)){Text(if(vm.busy)"Downloading…" else "Download & install")}}?:OutlinedButton({vm.checkForUpdate()},enabled=!vm.busy,modifier=Modifier.fillMaxWidth()){Text("Check for updates")}
