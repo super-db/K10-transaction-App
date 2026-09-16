@@ -6,21 +6,23 @@ import android.os.Build
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.Crossfade
-import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.*
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.k10.smsbridge.mobile.ManagedAccount
 import java.text.NumberFormat
 import java.time.Instant
 import java.time.ZoneId
@@ -31,68 +33,67 @@ import java.util.Locale
 fun K10PayApp(darkMode:Boolean,onToggleTheme:()->Unit,vm:MobileViewModel=viewModel()){
     val context=androidx.compose.ui.platform.LocalContext.current
     val notify=rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()){}
-    LaunchedEffect(vm.session){
-        if(vm.session!=null&&Build.VERSION.SDK_INT>=33&&ContextCompat.checkSelfPermission(context,Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED) notify.launch(Manifest.permission.POST_NOTIFICATIONS)
-    }
+    LaunchedEffect(vm.session){if(vm.session!=null&&Build.VERSION.SDK_INT>=33&&ContextCompat.checkSelfPermission(context,Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED)notify.launch(Manifest.permission.POST_NOTIFICATIONS)}
     val session=vm.session
-    if(session==null){LoginScreen(vm,darkMode,onToggleTheme);return}
+    if(session==null){AuthScreen(vm,darkMode,onToggleTheme);return}
+    if(session.passwordChangeRequired){ForcedPasswordScreen(vm,darkMode,onToggleTheme);return}
     var screen by remember{mutableStateOf("home")}
     BackHandler(enabled=screen!="home"){screen="home"}
-    Crossfade(targetState=screen,animationSpec=tween(260),label="screen"){destination->
+    AnimatedContent(targetState=screen,transitionSpec={fadeIn(tween(220))+slideInHorizontally{it/8} togetherWith fadeOut(tween(160))},label="screen"){destination->
         when(destination){
             "bridge"->BridgeApp()
-            "exclusions"->ExclusionsScreen(vm){screen="home"}
-            else->MobileHome(vm,darkMode,onToggleTheme,{screen="bridge"},{vm.loadExclusions();screen="exclusions"})
+            "exclusions"->ExclusionsScreen(vm){screen="settings"}
+            "passwords"->ManagePasswordsScreen(vm){screen="settings"}
+            "approvals"->ApprovalScreen(vm){screen="home"}
+            "settings"->SettingsScreen(vm,darkMode,onToggleTheme,{screen="home"},{screen="bridge"},{vm.loadExclusions();screen="exclusions"},{if(vm.session?.developer==true)vm.refreshApprovals(false);screen="passwords"})
+            else->MobileHome(vm,{screen="approvals"},{screen="settings"})
         }
     }
 }
 
-@Composable
-private fun ThemeButton(dark:Boolean,toggle:()->Unit){
-    FilledTonalIconButton(onClick=toggle){Text(if(dark)"☀" else "☾",style=MaterialTheme.typography.titleLarge)}
-}
+@Composable private fun ThemeButton(dark:Boolean,toggle:()->Unit){FilledTonalIconButton(onClick=toggle){Text(if(dark)"☀" else "☾",style=MaterialTheme.typography.titleLarge)}}
 
 @Composable
-private fun LoginScreen(vm:MobileViewModel,dark:Boolean,toggle:()->Unit){
-    var id by remember{mutableStateOf("")};var password by remember{mutableStateOf("")}
-    Scaffold{padding->Column(Modifier.fillMaxSize().padding(padding).padding(24.dp),verticalArrangement=Arrangement.Center){
-        Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically){Column(Modifier.weight(1f)){Text("K10 Pay",style=MaterialTheme.typography.displaySmall,fontWeight=FontWeight.Bold);Text("Slice transaction assistant",style=MaterialTheme.typography.titleMedium,color=MaterialTheme.colorScheme.primary)};ThemeButton(dark,toggle)}
-        Spacer(Modifier.height(28.dp))
-        OutlinedTextField(id,{id=it.uppercase()},label={Text("Login ID (for example DB, RR, AB)")},singleLine=true,modifier=Modifier.fillMaxWidth())
-        Spacer(Modifier.height(10.dp))
-        OutlinedTextField(password,{password=it},label={Text("Finance password")},singleLine=true,visualTransformation=PasswordVisualTransformation(),modifier=Modifier.fillMaxWidth())
-        if(vm.accounts.isNotEmpty())Text("Available: "+vm.accounts.joinToString{"${it.name} (${it.id})"},style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant,modifier=Modifier.padding(vertical=8.dp))
-        if(vm.message.isNotBlank())Text(vm.message,color=MaterialTheme.colorScheme.error)
-        Button({vm.login(id,password)},enabled=!vm.busy&&id.isNotBlank()&&password.isNotBlank(),modifier=Modifier.fillMaxWidth()){Text(if(vm.busy)"Signing in…" else "Sign in")}
-    }}
+private fun AuthScreen(vm:MobileViewModel,dark:Boolean,toggle:()->Unit){
+    var mode by remember{mutableStateOf("choose")}
+    BackHandler(enabled=mode!="choose"){vm.clearMessage();mode="choose"}
+    Scaffold{padding->LazyColumn(Modifier.fillMaxSize().padding(padding),contentPadding=PaddingValues(24.dp),verticalArrangement=Arrangement.Center){item{
+        Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically){Column(Modifier.weight(1f)){Text("K10 Pay",style=MaterialTheme.typography.displaySmall,fontWeight=FontWeight.Bold);Text("Secure Slice transaction assistant",color=MaterialTheme.colorScheme.primary)};ThemeButton(dark,toggle)}
+        Spacer(Modifier.height(30.dp))
+        AnimatedContent(mode,label="auth-mode"){value->when(value){
+            "developer"->DeveloperLogin(vm){mode="forgot"}
+            "staff"->StaffLogin(vm,{mode="signup"},{mode="forgot"})
+            "signup"->SignupForm(vm){mode="staff"}
+            "forgot"->ForgotPasswordForm(vm){mode="choose"}
+            else->Column(verticalArrangement=Arrangement.spacedBy(12.dp)){Text("Choose how you want to continue",style=MaterialTheme.typography.titleLarge,fontWeight=FontWeight.SemiBold);Button({vm.clearMessage();mode="developer"},Modifier.fillMaxWidth().height(54.dp)){Text("Developer")};OutlinedButton({vm.clearMessage();mode="staff"},Modifier.fillMaxWidth().height(54.dp)){Text("Staff login")};TextButton({vm.clearMessage();mode="signup"},Modifier.align(Alignment.CenterHorizontally)){Text("New staff? Create account")};TextButton({vm.clearMessage();mode="forgot"},Modifier.align(Alignment.CenterHorizontally)){Text("Forgot password?")}}
+        }}
+    }}}
 }
 
-@Composable
-private fun MobileHome(vm:MobileViewModel,dark:Boolean,toggle:()->Unit,openBridge:()->Unit,openExclusions:()->Unit){
-    val session=vm.session?:return
-    Scaffold(topBar={Surface(shadowElevation=3.dp){Row(Modifier.fillMaxWidth().padding(14.dp),verticalAlignment=Alignment.CenterVertically){Column(Modifier.weight(1f)){Text("K10 Pay",style=MaterialTheme.typography.headlineMedium,fontWeight=FontWeight.Bold);Text(session.displayName,color=MaterialTheme.colorScheme.onSurfaceVariant)};ThemeButton(dark,toggle);TextButton(onClick=vm::logout){Text("Logout")}}}}){padding->
-        LazyColumn(Modifier.fillMaxSize().padding(padding).padding(horizontal=16.dp),contentPadding=PaddingValues(vertical=16.dp),verticalArrangement=Arrangement.spacedBy(10.dp)){
-            item{Card(Modifier.fillMaxWidth(),colors=CardDefaults.cardColors(containerColor=MaterialTheme.colorScheme.surfaceVariant)){Column(Modifier.padding(18.dp)){Text("K10 SLICE ACCOUNT",color=MaterialTheme.colorScheme.primary,fontWeight=FontWeight.Bold);val total=vm.transactions.mapNotNull{it.amount}.sum();Crossfade(targetState=if(vm.transactions.any{it.amount!=null})money(total)else"Amount hidden",label="total"){Text(it,style=MaterialTheme.typography.headlineLarge,fontWeight=FontWeight.Bold)};Text("${vm.transactions.size} transaction(s) · ${vm.range}",color=MaterialTheme.colorScheme.onSurfaceVariant)}}}
-            item{Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(6.dp)){Range("Today",true,vm.range=="today",Modifier.weight(1f)){vm.load("today")};Range("15d",session.has("finance.slice.history15"),vm.range=="15d",Modifier.weight(1f)){vm.load("15d")};Range("30d",session.has("finance.slice.history30"),vm.range=="30d",Modifier.weight(1f)){vm.load("30d")};Range("All",session.has("finance.slice.historyLifetime"),vm.range=="all",Modifier.weight(1f)){vm.load("all")}}}
-            if(session.developer)item{Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(8.dp)){OutlinedButton(openBridge,Modifier.weight(1f)){Text("SMS Bridge")};OutlinedButton(openExclusions,Modifier.weight(1f)){Text("Excluded Payers")}}}
-            if(vm.message.isNotBlank())item{Text(vm.message,color=MaterialTheme.colorScheme.error)}
-            if(vm.busy)item{LinearProgressIndicator(Modifier.fillMaxWidth())}
-            if(!vm.busy&&vm.transactions.isEmpty())item{Text("No visible transactions in this range.",color=MaterialTheme.colorScheme.onSurfaceVariant,modifier=Modifier.padding(20.dp))}
-            items(vm.transactions,key={it.id}){tx->Card(Modifier.fillMaxWidth()){Column(Modifier.padding(16.dp)){Text(tx.payerName,fontWeight=FontWeight.Bold,style=MaterialTheme.typography.titleMedium);Text(tx.amount?.let(::money)?:"Amount hidden",style=MaterialTheme.typography.headlineSmall);Text(formatTime(tx.occurredAt),color=MaterialTheme.colorScheme.onSurfaceVariant);Text(tx.paymentMethod,style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.primary)}}}
-        }
-    }
-}
+@Composable private fun DeveloperLogin(vm:MobileViewModel,forgot:()->Unit){var password by remember{mutableStateOf("")};Column(verticalArrangement=Arrangement.spacedBy(12.dp)){Text("Developer password",style=MaterialTheme.typography.headlineSmall,fontWeight=FontWeight.Bold);Text("For this version, the one-time password is 123456. You must replace it after signing in.",color=MaterialTheme.colorScheme.onSurfaceVariant);PasswordField(password,{password=it},"Password");Message(vm);Button({vm.login("DB",password,true)},enabled=!vm.busy&&password.isNotBlank(),modifier=Modifier.fillMaxWidth()){Text(if(vm.busy)"Signing in…" else "Continue")};TextButton(forgot,Modifier.align(Alignment.CenterHorizontally)){Text("Forgot password?")}}}
 
-@Composable
-private fun Range(label:String,enabled:Boolean,selected:Boolean,modifier:Modifier,onClick:()->Unit){
-    val color by animateColorAsState(if(selected)MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface,label="range")
-    OutlinedButton(onClick,enabled=enabled,modifier=modifier,colors=ButtonDefaults.outlinedButtonColors(containerColor=color),contentPadding=PaddingValues(horizontal=4.dp)){Text(label)}
-}
+@Composable private fun StaffLogin(vm:MobileViewModel,signup:()->Unit,forgot:()->Unit){var phone by remember{mutableStateOf("")};var password by remember{mutableStateOf("")};Column(verticalArrangement=Arrangement.spacedBy(12.dp)){Text("Staff login",style=MaterialTheme.typography.headlineSmall,fontWeight=FontWeight.Bold);OutlinedTextField(phone,{phone=it.filter(Char::isDigit).take(15)},label={Text("Phone number")},keyboardOptions=KeyboardOptions(keyboardType=KeyboardType.Phone),singleLine=true,modifier=Modifier.fillMaxWidth());PasswordField(password,{password=it},"Password");Message(vm);Button({vm.login(phone,password,false)},enabled=!vm.busy&&phone.length>=10&&password.isNotBlank(),modifier=Modifier.fillMaxWidth()){Text(if(vm.busy)"Signing in…" else "Sign in")};Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.SpaceBetween){TextButton(signup){Text("Create account")};TextButton(forgot){Text("Forgot password?")}}}}
 
-@Composable
-private fun ExclusionsScreen(vm:MobileViewModel,back:()->Unit){
-    var value by remember(vm.exclusions){mutableStateOf(vm.exclusions)}
-    Scaffold(topBar={Surface(shadowElevation=2.dp){Row(Modifier.fillMaxWidth().padding(12.dp),verticalAlignment=Alignment.CenterVertically){TextButton(back){Text("‹ Back")};Text("Excluded Payers",style=MaterialTheme.typography.headlineSmall,fontWeight=FontWeight.Bold)}}}){padding->Column(Modifier.padding(padding).padding(16.dp)){Text("Transactions from these exact names are blocked from speech, notifications, history and totals.",color=MaterialTheme.colorScheme.onSurfaceVariant);OutlinedTextField(value,{value=it},label={Text("Names separated by commas")},minLines=4,modifier=Modifier.fillMaxWidth().padding(vertical=12.dp));Button({vm.saveExclusions(value)},enabled=!vm.busy,modifier=Modifier.fillMaxWidth()){Text(if(vm.busy)"Saving…"else"Save exclusions")};if(vm.message.isNotBlank())Text(vm.message,modifier=Modifier.padding(top=10.dp))}}
-}
+@Composable private fun SignupForm(vm:MobileViewModel,done:()->Unit){var name by remember{mutableStateOf("")};var phone by remember{mutableStateOf("")};var email by remember{mutableStateOf("")};var password by remember{mutableStateOf("")};var confirm by remember{mutableStateOf("")};Column(verticalArrangement=Arrangement.spacedBy(10.dp)){Text("Create staff account",style=MaterialTheme.typography.headlineSmall,fontWeight=FontWeight.Bold);Text("Developer approval is required before the first sign-in.",color=MaterialTheme.colorScheme.onSurfaceVariant);OutlinedTextField(name,{name=it.take(100)},label={Text("Full name")},singleLine=true,modifier=Modifier.fillMaxWidth());OutlinedTextField(phone,{phone=it.filter(Char::isDigit).take(15)},label={Text("Phone number")},keyboardOptions=KeyboardOptions(keyboardType=KeyboardType.Phone),singleLine=true,modifier=Modifier.fillMaxWidth());OutlinedTextField(email,{email=it.trim().take(254)},label={Text("Email for password recovery")},keyboardOptions=KeyboardOptions(keyboardType=KeyboardType.Email),singleLine=true,modifier=Modifier.fillMaxWidth());PasswordField(password,{password=it},"Create password (minimum 8 characters)");PasswordField(confirm,{confirm=it},"Confirm password");if(confirm.isNotEmpty()&&confirm!=password)Text("Passwords do not match",color=MaterialTheme.colorScheme.error);Message(vm);Button({vm.signup(name,phone,email,password)},enabled=!vm.busy&&name.isNotBlank()&&phone.length>=10&&email.contains('@')&&password.length>=8&&password==confirm,modifier=Modifier.fillMaxWidth()){Text(if(vm.busy)"Sending request…" else "Request approval")};TextButton(done,Modifier.align(Alignment.CenterHorizontally)){Text("Back to staff login")}}}
+
+@Composable private fun ForgotPasswordForm(vm:MobileViewModel,done:()->Unit){var email by remember{mutableStateOf("")};var code by remember{mutableStateOf("")};var password by remember{mutableStateOf("")};var sent by remember{mutableStateOf(false)};Column(verticalArrangement=Arrangement.spacedBy(11.dp)){Text("Reset password",style=MaterialTheme.typography.headlineSmall,fontWeight=FontWeight.Bold);Text("We send a one-time code to the registered email. Your existing password is never emailed.",color=MaterialTheme.colorScheme.onSurfaceVariant);OutlinedTextField(email,{email=it.trim()},label={Text("Registered email")},keyboardOptions=KeyboardOptions(keyboardType=KeyboardType.Email),singleLine=true,enabled=!sent,modifier=Modifier.fillMaxWidth());if(sent){OutlinedTextField(code,{code=it.filter(Char::isDigit).take(6)},label={Text("6-digit code")},keyboardOptions=KeyboardOptions(keyboardType=KeyboardType.NumberPassword),singleLine=true,modifier=Modifier.fillMaxWidth());PasswordField(password,{password=it},"New password (minimum 8 characters)")};Message(vm);if(!sent)Button({vm.requestReset(email){sent=true}},enabled=!vm.busy&&email.contains('@'),modifier=Modifier.fillMaxWidth()){Text(if(vm.busy)"Sending…" else "Send reset code")}else Button({vm.completeReset(email,code,password,done)},enabled=!vm.busy&&code.length==6&&password.length>=8,modifier=Modifier.fillMaxWidth()){Text(if(vm.busy)"Resetting…" else "Set new password")};TextButton(done,Modifier.align(Alignment.CenterHorizontally)){Text("Back to login")}}}
+
+@Composable private fun ForcedPasswordScreen(vm:MobileViewModel,dark:Boolean,toggle:()->Unit){var current by remember{mutableStateOf("")};var next by remember{mutableStateOf("")};var confirm by remember{mutableStateOf("")};BackHandler{};Scaffold{padding->Column(Modifier.fillMaxSize().padding(padding).padding(24.dp),verticalArrangement=Arrangement.Center){Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically){Column(Modifier.weight(1f)){Text("Create your private password",style=MaterialTheme.typography.headlineMedium,fontWeight=FontWeight.Bold);Text("Required before K10 Pay opens",color=MaterialTheme.colorScheme.primary)};ThemeButton(dark,toggle)};Spacer(Modifier.height(22.dp));PasswordField(current,{current=it},"Current / temporary password");Spacer(Modifier.height(10.dp));PasswordField(next,{next=it},"New password (minimum 8 characters)");Spacer(Modifier.height(10.dp));PasswordField(confirm,{confirm=it},"Confirm new password");if(confirm.isNotEmpty()&&confirm!=next)Text("Passwords do not match",color=MaterialTheme.colorScheme.error);Message(vm);Button({vm.changePassword(current,next){ }},enabled=!vm.busy&&current.isNotBlank()&&next.length>=8&&next==confirm,modifier=Modifier.fillMaxWidth().padding(top=12.dp)){Text(if(vm.busy)"Saving…" else "Save and sign in again")}}}}
+
+@Composable private fun MobileHome(vm:MobileViewModel,openApprovals:()->Unit,openSettings:()->Unit){val session=vm.session?:return;Scaffold(topBar={Surface(shadowElevation=3.dp){Row(Modifier.fillMaxWidth().padding(horizontal=14.dp,vertical=10.dp),verticalAlignment=Alignment.CenterVertically){Column(Modifier.weight(1f)){Text("K10 Pay",style=MaterialTheme.typography.headlineMedium,fontWeight=FontWeight.Bold);Text(session.displayName,color=MaterialTheme.colorScheme.onSurfaceVariant)};if(session.developer)BadgedBox(badge={if(vm.pendingApprovals>0)Badge{Text(vm.pendingApprovals.coerceAtMost(99).toString())}}){IconButton(openApprovals){Text("🔔",style=MaterialTheme.typography.titleLarge)}};IconButton(openSettings){Text("⚙",style=MaterialTheme.typography.titleLarge)}}}}){padding->LazyColumn(Modifier.fillMaxSize().padding(padding).padding(horizontal=16.dp),contentPadding=PaddingValues(vertical=16.dp),verticalArrangement=Arrangement.spacedBy(10.dp)){item{Card(Modifier.fillMaxWidth(),colors=CardDefaults.cardColors(containerColor=MaterialTheme.colorScheme.surfaceVariant)){Column(Modifier.padding(18.dp)){Text("K10 SLICE ACCOUNT",color=MaterialTheme.colorScheme.primary,fontWeight=FontWeight.Bold);val total=vm.transactions.mapNotNull{it.amount}.sum();Crossfade(targetState=if(vm.transactions.any{it.amount!=null})money(total)else"Amount hidden",label="total"){Text(it,style=MaterialTheme.typography.headlineLarge,fontWeight=FontWeight.Bold)};Text("${vm.transactions.size} transaction(s) · ${vm.range}",color=MaterialTheme.colorScheme.onSurfaceVariant)}}};item{Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(6.dp)){Range("Today",true,vm.range=="today",Modifier.weight(1f)){vm.load("today")};Range("15d",session.has("finance.slice.history15"),vm.range=="15d",Modifier.weight(1f)){vm.load("15d")};Range("30d",session.has("finance.slice.history30"),vm.range=="30d",Modifier.weight(1f)){vm.load("30d")};Range("All",session.has("finance.slice.historyLifetime"),vm.range=="all",Modifier.weight(1f)){vm.load("all")}}};if(vm.message.isNotBlank())item{Message(vm)};if(vm.busy)item{LinearProgressIndicator(Modifier.fillMaxWidth())};if(!vm.busy&&vm.transactions.isEmpty())item{Text("No visible transactions in this range.",color=MaterialTheme.colorScheme.onSurfaceVariant,modifier=Modifier.padding(20.dp))};items(vm.transactions,key={it.id}){tx->Card(Modifier.fillMaxWidth()){Column(Modifier.padding(16.dp)){Text(tx.payerName,fontWeight=FontWeight.Bold,style=MaterialTheme.typography.titleMedium);Text(tx.amount?.let(::money)?:"Amount hidden",style=MaterialTheme.typography.headlineSmall);Text(formatTime(tx.occurredAt),color=MaterialTheme.colorScheme.onSurfaceVariant);Text(tx.paymentMethod,style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.primary)}}}}}}
+
+@Composable private fun SettingsScreen(vm:MobileViewModel,dark:Boolean,toggle:()->Unit,back:()->Unit,bridge:()->Unit,exclusions:()->Unit,passwords:()->Unit){Scaffold(topBar={AppBar("Settings",back)}){padding->LazyColumn(Modifier.fillMaxSize().padding(padding),contentPadding=PaddingValues(16.dp),verticalArrangement=Arrangement.spacedBy(12.dp)){item{SettingsCard("Appearance","Use a comfortable light or dark colour scheme."){Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically){Text(if(dark)"Dark mode" else "Light mode",Modifier.weight(1f));Switch(dark,{toggle()})}}};item{SettingsCard("Account","Password, security and sign-out controls."){Button(passwords,Modifier.fillMaxWidth()){Text("Manage password")};Spacer(Modifier.height(8.dp));OutlinedButton({vm.logout()},Modifier.fillMaxWidth()){Text("Sign out")}}};if(vm.session?.developer==true){item{SettingsCard("Transaction rules","Manage hidden payer names and the SMS bridge."){OutlinedButton(exclusions,Modifier.fillMaxWidth()){Text("Excluded payer names")};Spacer(Modifier.height(8.dp));OutlinedButton(bridge,Modifier.fillMaxWidth()){Text("SMS bridge settings")}}}}}}}
+
+@Composable private fun ApprovalScreen(vm:MobileViewModel,back:()->Unit){LaunchedEffect(Unit){vm.refreshApprovals(false)};Scaffold(topBar={AppBar("Approval inbox",back)}){padding->LazyColumn(Modifier.fillMaxSize().padding(padding),contentPadding=PaddingValues(16.dp),verticalArrangement=Arrangement.spacedBy(10.dp)){item{Text("New staff accounts remain blocked until you approve them.",color=MaterialTheme.colorScheme.onSurfaceVariant)};if(vm.busy)item{LinearProgressIndicator(Modifier.fillMaxWidth())};if(vm.requests.isEmpty())item{Card(Modifier.fillMaxWidth()){Text("No pending staff requests",Modifier.padding(20.dp),color=MaterialTheme.colorScheme.onSurfaceVariant)}};items(vm.requests,key={it.id}){request->Card(Modifier.fillMaxWidth()){Column(Modifier.padding(16.dp)){Text(request.name,style=MaterialTheme.typography.titleLarge,fontWeight=FontWeight.Bold);Text(request.phone);Text(request.email,color=MaterialTheme.colorScheme.onSurfaceVariant);Row(Modifier.fillMaxWidth().padding(top=12.dp),horizontalArrangement=Arrangement.spacedBy(8.dp)){Button({vm.review(request.id,true)},Modifier.weight(1f),enabled=!vm.busy){Text("Approve")};OutlinedButton({vm.review(request.id,false)},Modifier.weight(1f),enabled=!vm.busy){Text("Reject")}}}}};if(vm.message.isNotBlank())item{Message(vm)}}}}
+
+@Composable private fun ManagePasswordsScreen(vm:MobileViewModel,back:()->Unit){var current by remember{mutableStateOf("")};var next by remember{mutableStateOf("")};var target by remember{mutableStateOf<ManagedAccount?>(null)};var temporary by remember{mutableStateOf("")};Scaffold(topBar={AppBar("Manage password",back)}){padding->LazyColumn(Modifier.fillMaxSize().padding(padding),contentPadding=PaddingValues(16.dp),verticalArrangement=Arrangement.spacedBy(12.dp)){item{SettingsCard("Change my password","Changing it signs out all existing sessions."){PasswordField(current,{current=it},"Current password");Spacer(Modifier.height(8.dp));PasswordField(next,{next=it},"New password (minimum 8 characters)");Button({vm.changePassword(current,next){ }},enabled=!vm.busy&&current.isNotBlank()&&next.length>=8,modifier=Modifier.fillMaxWidth().padding(top=10.dp)){Text("Change my password")}}};if(vm.session?.developer==true){item{Text("Reset staff password",style=MaterialTheme.typography.titleLarge,fontWeight=FontWeight.Bold);Text("This revokes the staff member's sessions and requires them to change the temporary password next time.",color=MaterialTheme.colorScheme.onSurfaceVariant)};items(vm.managedAccounts.filter{it.role!="developer"},key={it.id}){account->Card(Modifier.fillMaxWidth()){Column(Modifier.padding(16.dp)){Text(account.name,fontWeight=FontWeight.Bold);Text(if(account.phone.isBlank())account.email else account.phone,color=MaterialTheme.colorScheme.onSurfaceVariant);OutlinedButton({target=account},Modifier.fillMaxWidth().padding(top=8.dp)){Text("Set temporary password")}}}}};if(vm.message.isNotBlank())item{Message(vm)}}};if(target!=null)AlertDialog(onDismissRequest={target=null},title={Text("Reset ${target!!.name}")},text={Column{Text("Enter a temporary password. They must replace it after signing in.");PasswordField(temporary,{temporary=it},"Temporary password")}},confirmButton={Button({vm.adminReset(target!!.id,temporary);target=null;temporary=""},enabled=temporary.length>=8){Text("Reset password")}},dismissButton={TextButton({target=null}){Text("Cancel")}})}}
+
+@Composable private fun ExclusionsScreen(vm:MobileViewModel,back:()->Unit){var value by remember(vm.exclusions){mutableStateOf(vm.exclusions)};Scaffold(topBar={AppBar("Excluded payers",back)}){padding->Column(Modifier.padding(padding).padding(16.dp)){Text("Transactions from these exact names are blocked from speech, notifications, history and totals.",color=MaterialTheme.colorScheme.onSurfaceVariant);OutlinedTextField(value,{value=it},label={Text("Names separated by commas")},minLines=4,modifier=Modifier.fillMaxWidth().padding(vertical=12.dp));Button({vm.saveExclusions(value)},enabled=!vm.busy,modifier=Modifier.fillMaxWidth()){Text(if(vm.busy)"Saving…"else"Save exclusions")};Message(vm)}}}
+
+@Composable private fun AppBar(title:String,back:()->Unit){Surface(shadowElevation=2.dp){Row(Modifier.fillMaxWidth().padding(10.dp),verticalAlignment=Alignment.CenterVertically){TextButton(back){Text("‹ Back")};Text(title,style=MaterialTheme.typography.headlineSmall,fontWeight=FontWeight.Bold)}}}
+@Composable private fun SettingsCard(title:String,subtitle:String,content:@Composable ColumnScope.()->Unit){Card(Modifier.fillMaxWidth()){Column(Modifier.padding(16.dp)){Text(title,style=MaterialTheme.typography.titleLarge,fontWeight=FontWeight.Bold);Text(subtitle,color=MaterialTheme.colorScheme.onSurfaceVariant,modifier=Modifier.padding(bottom=12.dp));content()}}}
+@Composable private fun PasswordField(value:String,onChange:(String)->Unit,label:String){OutlinedTextField(value,onChange,label={Text(label)},singleLine=true,visualTransformation=PasswordVisualTransformation(),keyboardOptions=KeyboardOptions(keyboardType=KeyboardType.Password),modifier=Modifier.fillMaxWidth())}
+@Composable private fun Message(vm:MobileViewModel){if(vm.message.isNotBlank())Text(vm.message,color=if(vm.messageIsError)MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,modifier=Modifier.padding(vertical=8.dp))}
+@Composable private fun Range(label:String,enabled:Boolean,selected:Boolean,modifier:Modifier,onClick:()->Unit){OutlinedButton(onClick,enabled=enabled,modifier=modifier,colors=ButtonDefaults.outlinedButtonColors(containerColor=if(selected)MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface),contentPadding=PaddingValues(horizontal=4.dp)){Text(label)}}
 private fun money(value:Double)=NumberFormat.getCurrencyInstance(Locale("en","IN")).format(value)
 private fun formatTime(value:String)=runCatching{DateTimeFormatter.ofPattern("dd MMM uuuu, h:mm a").format(Instant.parse(value).atZone(ZoneId.systemDefault()))}.getOrDefault(value)
