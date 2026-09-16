@@ -79,7 +79,7 @@ class SmsParserTest {
         val rules = RuleConfig.DEFAULT.copy(excludedPayerNames = listOf("A Person"))
         val result = SmsParser.parse("SLICE", "Rs 2000 received in A/c xx7972 on 2 Sep from A Person via UPI.", receivedAt, rules)
         assertTrue(result.reason, result.eligible)
-        assertTrue(result.payerExcluded)
+        assertTrue(result.transaction?.payerExcluded == true)
         assertEquals("A Person", result.transaction?.payerName)
     }
 
@@ -87,7 +87,7 @@ class SmsParserTest {
     fun defaultRulesDoNotHideAPreviouslyHardCodedName() {
         val result = SmsParser.parse("SLICE", "Rs 10 received in A/c xx7972 on 2 Sep from Devasish Bhagawati via UPI.", receivedAt, RuleConfig.DEFAULT)
         assertTrue(result.reason, result.eligible)
-        assertFalse(result.payerExcluded)
+        assertFalse(result.transaction?.payerExcluded == true)
     }
 
     @Test
