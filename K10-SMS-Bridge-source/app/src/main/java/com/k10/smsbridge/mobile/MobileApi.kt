@@ -12,6 +12,7 @@ data class AccountRequest(val id:String,val name:String,val phone:String,val ema
 data class ManagedAccount(val id:String,val name:String,val phone:String,val email:String,val role:String,val historyTier:String,val active:Boolean,val passwordChangeRequired:Boolean)
 data class ApprovalInbox(val requests:List<AccountRequest>,val accounts:List<ManagedAccount>)
 data class AppUpdateInfo(val latestVersionCode:Int,val latestVersionName:String,val minimumSupportedVersionCode:Int,val mandatory:Boolean,val downloadUrl:String,val sha256:String,val releaseNotes:List<String>)
+data class ExcludedPayer(val name:String,val transactionCount:Int,val lastSeenAt:String)
 
 object MobileApi{
     const val BASE_URL="https://finances.k10classes.com"
@@ -68,11 +69,12 @@ object MobileApi{
         val(code,body)=request("/api/mobile/transactions?range=$range","GET",session.token,null);val json=json(body)
         if(code !in 200..299)error(json.optString("error","Could not load transactions"));val array=json.optJSONArray("transactions")?:JSONArray()
         (0 until array.length()).map{array.getJSONObject(it)}.map{MobileTransaction(it.getString("id"),it.optString("payerName","Unknown payer"),if(it.isNull("amount"))null else it.optDouble("amount"),it.optString("occurredAt"),it.optString("paymentMethod","UNKNOWN"),it.optString("status","new"))}
+            .distinctBy{"${it.payerName.trim().uppercase()}|${it.amount}|${it.occurredAt.take(16)}"}
     }
-    suspend fun register(session:MobileSession,fcmToken:String,deviceId:String,bridge:Boolean)=withContext(Dispatchers.IO){val payload=JSONObject().put("fcmToken",fcmToken).put("deviceId",deviceId).put("appVersion","4.0.0").put("bridgeDevice",bridge);val(code,body)=request("/api/mobile/devices","POST",session.token,payload.toString());if(code !in 200..299)error(json(body).optString("error","Device registration failed"))}
+    suspend fun register(session:MobileSession,fcmToken:String,deviceId:String,bridge:Boolean)=withContext(Dispatchers.IO){val payload=JSONObject().put("fcmToken",fcmToken).put("deviceId",deviceId).put("appVersion","4.1.0").put("bridgeDevice",bridge);val(code,body)=request("/api/mobile/devices","POST",session.token,payload.toString());if(code !in 200..299)error(json(body).optString("error","Device registration failed"))}
     suspend fun unregister(session:MobileSession,deviceId:String)=withContext(Dispatchers.IO){request("/api/mobile/devices","DELETE",session.token,JSONObject().put("deviceId",deviceId).toString())}
-    suspend fun exclusions(session:MobileSession):List<String> = withContext(Dispatchers.IO){val(code,body)=request("/api/mobile/exclusions","GET",session.token,null);val json=json(body);if(code !in 200..299)error(json.optString("error","Could not load exclusions"));val array=json.optJSONArray("names")?:JSONArray();(0 until array.length()).map{array.getString(it)}}
-    suspend fun saveExclusions(session:MobileSession,names:List<String>):List<String> = withContext(Dispatchers.IO){val(code,body)=request("/api/mobile/exclusions","PUT",session.token,JSONObject().put("names",JSONArray(names)).toString());val json=json(body);if(code !in 200..299)error(json.optString("error","Could not save exclusions"));val array=json.optJSONArray("names")?:JSONArray();(0 until array.length()).map{array.getString(it)}}
+    suspend fun exclusions(session:MobileSession):List<ExcludedPayer> = withContext(Dispatchers.IO){val(code,body)=request("/api/mobile/exclusions","GET",session.token,null);val json=json(body);if(code !in 200..299)error(json.optString("error","Could not load exclusions"));excludedPayers(json)}
+    suspend fun saveExclusions(session:MobileSession,names:List<String>):List<ExcludedPayer> = withContext(Dispatchers.IO){val(code,body)=request("/api/mobile/exclusions","PUT",session.token,JSONObject().put("names",JSONArray(names)).toString());val json=json(body);if(code !in 200..299)error(json.optString("error","Could not save exclusions"));excludedPayers(json)}
     suspend fun preferences(session:MobileSession):NotificationPreferences = withContext(Dispatchers.IO){
         val(code,body)=request("/api/mobile/preferences","GET",session.token,null);val json=json(body)
         if(code !in 200..299)error(json.optString("error","Could not load notification settings"));preferences(json.optJSONObject("preferences")?:JSONObject())
@@ -94,6 +96,7 @@ object MobileApi{
         return MobileSession(json.getString("token"),user.getString("id"),user.getString("loginId"),user.getString("displayName"),user.getString("role"),user.optString("historyTier","today"),(0 until permissions.length()).map{permissions.getString(it)}.toSet(),user.optBoolean("passwordChangeRequired"),preferences(user.optJSONObject("notificationPreferences")?:JSONObject()))
     }
     private fun preferences(json:JSONObject)=NotificationPreferences(json.optBoolean("transactionAlerts",true),json.optBoolean("voiceAnnouncements",true),json.optBoolean("approvalAlerts",false))
+    private fun excludedPayers(json:JSONObject):List<ExcludedPayer>{val items=json.optJSONArray("items");if(items!=null)return(0 until items.length()).map{items.getJSONObject(it)}.map{ExcludedPayer(it.optString("name"),it.optInt("transactionCount"),it.optString("lastSeenAt"))};val names=json.optJSONArray("names")?:JSONArray();return(0 until names.length()).map{ExcludedPayer(names.getString(it),0,"")}}
     private fun json(body:String)=runCatching{JSONObject(body)}.getOrElse{JSONObject().put("error","Server returned an invalid response. Please try again.")}
     private fun request(path:String,method:String,token:String?,body:String?):Pair<Int,String>{val connection=(URL(BASE_URL+path).openConnection() as HttpURLConnection).apply{requestMethod=method;connectTimeout=15_000;readTimeout=20_000;setRequestProperty("Accept","application/json");if(token!=null)setRequestProperty("Authorization","Bearer $token");if(body!=null){doOutput=true;setRequestProperty("Content-Type","application/json");outputStream.use{it.write(body.toByteArray())}}};return try{val code=connection.responseCode;val stream=if(code in 200..399)connection.inputStream else connection.errorStream;code to(stream?.bufferedReader()?.use{it.readText()}?:"")}finally{connection.disconnect()}}
 }

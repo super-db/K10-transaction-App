@@ -7,15 +7,21 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
-import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.*
+import androidx.compose.foundation.background
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -44,12 +50,13 @@ fun K10PayApp(darkMode:Boolean,themeMode:ThemeMode,onThemeModeChange:(ThemeMode)
     BackHandler(enabled=screen!="home"){screen="home"}
     AnimatedContent(targetState=screen,transitionSpec={fadeIn(tween(220))+slideInHorizontally{it/8} togetherWith fadeOut(tween(160))},label="screen"){destination->
         when(destination){
-            "bridge"->BridgeApp()
+            "bridge_settings"->BridgeApp(initialScreen="settings",exit={screen="settings"})
+            "bridge_search"->BridgeApp(initialScreen="search",exit={screen="settings"})
             "exclusions"->ExclusionsScreen(vm){screen="settings"}
             "passwords"->ManagePasswordsScreen(vm){screen="settings"}
             "roles"->StaffAccessScreen(vm){screen="settings"}
             "approvals"->ApprovalScreen(vm){screen="home"}
-            "settings"->SettingsScreen(vm,themeMode,onThemeModeChange,{screen="home"},{screen="bridge"},{vm.loadExclusions();screen="exclusions"},{if(vm.session?.developer==true)vm.refreshApprovals(false);screen="passwords"},{vm.refreshApprovals(false);screen="roles"})
+            "settings"->SettingsScreen(vm,themeMode,onThemeModeChange,{screen="home"},{screen="bridge_settings"},{screen="bridge_search"},{vm.loadExclusions();screen="exclusions"},{if(vm.session?.developer==true)vm.refreshApprovals(false);screen="passwords"},{vm.refreshApprovals(false);screen="roles"})
             else->MobileHome(vm,{screen="approvals"},{screen="settings"})
         }
     }
@@ -84,10 +91,44 @@ private fun AuthScreen(vm:MobileViewModel,dark:Boolean,toggle:()->Unit){
 
 @Composable private fun ForcedPasswordScreen(vm:MobileViewModel,dark:Boolean,toggle:()->Unit){var current by remember{mutableStateOf("")};var next by remember{mutableStateOf("")};var confirm by remember{mutableStateOf("")};BackHandler{};Scaffold{padding->Column(Modifier.fillMaxSize().padding(padding).padding(24.dp),verticalArrangement=Arrangement.Center){Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically){Column(Modifier.weight(1f)){Text("Create your private password",style=MaterialTheme.typography.headlineMedium,fontWeight=FontWeight.Bold);Text("Required before K10 Pay opens",color=MaterialTheme.colorScheme.primary)};ThemeButton(dark,toggle)};Spacer(Modifier.height(22.dp));PasswordField(current,{current=it},"Current / temporary password");Spacer(Modifier.height(10.dp));PasswordField(next,{next=it},"New password (minimum 8 characters)");Spacer(Modifier.height(10.dp));PasswordField(confirm,{confirm=it},"Confirm new password");if(confirm.isNotEmpty()&&confirm!=next)Text("Passwords do not match",color=MaterialTheme.colorScheme.error);Message(vm);Button({vm.changePassword(current,next){ }},enabled=!vm.busy&&current.isNotBlank()&&next.length>=8&&next==confirm,modifier=Modifier.fillMaxWidth().padding(top=12.dp)){Text(if(vm.busy)"Saving…" else "Save and sign in again")}}}}
 
-@Composable private fun MobileHome(vm:MobileViewModel,openApprovals:()->Unit,openSettings:()->Unit){val session=vm.session?:return;Scaffold(topBar={Surface(shadowElevation=3.dp){Row(Modifier.fillMaxWidth().statusBarsPadding().padding(horizontal=16.dp,vertical=12.dp),verticalAlignment=Alignment.CenterVertically){Column(Modifier.weight(1f)){K10Wordmark(MaterialTheme.typography.headlineMedium);Text("${session.displayName} · ${roleName(session.role)}",color=MaterialTheme.colorScheme.onSurfaceVariant)};if(session.developer)BadgedBox(badge={if(vm.pendingApprovals>0)Badge{Text(vm.pendingApprovals.coerceAtMost(99).toString())}}){IconButton(openApprovals){Text("●",color=MaterialTheme.colorScheme.primary,style=MaterialTheme.typography.titleLarge)}};IconButton(openSettings){Text("⚙",style=MaterialTheme.typography.titleLarge)}}}}){padding->LazyColumn(Modifier.fillMaxSize().padding(padding).padding(horizontal=16.dp),contentPadding=PaddingValues(vertical=16.dp),verticalArrangement=Arrangement.spacedBy(12.dp)){item{Card(Modifier.fillMaxWidth(),colors=CardDefaults.cardColors(containerColor=MaterialTheme.colorScheme.primaryContainer)){Column(Modifier.padding(20.dp)){Text("K10 SLICE ACCOUNT",color=MaterialTheme.colorScheme.primary,fontWeight=FontWeight.Bold);val total=vm.transactions.mapNotNull{it.amount}.sum();Crossfade(targetState=if(vm.transactions.any{it.amount!=null})money(total)else"Amount hidden",label="total"){Text(it,style=MaterialTheme.typography.headlineLarge,fontWeight=FontWeight.Bold)};Text("Received · ${rangeName(vm.range)} · ${vm.transactions.size} transaction(s)",color=MaterialTheme.colorScheme.onSurfaceVariant)}}};item{Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(6.dp)){Range("Today",true,vm.range=="today",Modifier.weight(1f)){vm.load("today")};Range("15d",session.has("finance.slice.history15"),vm.range=="15d",Modifier.weight(1f)){vm.load("15d")};Range("30d",session.has("finance.slice.history30"),vm.range=="30d",Modifier.weight(1f)){vm.load("30d")};Range("All",session.has("finance.slice.historyLifetime"),vm.range=="all",Modifier.weight(1f)){vm.load("all")}}};item{Text("Recent transactions",style=MaterialTheme.typography.titleLarge,fontWeight=FontWeight.Bold)};if(vm.message.isNotBlank())item{Message(vm)};if(vm.busy)item{LinearProgressIndicator(Modifier.fillMaxWidth())};if(!vm.busy&&vm.transactions.isEmpty())item{Text("No visible transactions in this range.",color=MaterialTheme.colorScheme.onSurfaceVariant,modifier=Modifier.padding(20.dp))};items(vm.transactions,key={it.id}){tx->Card(Modifier.fillMaxWidth()){Row(Modifier.padding(16.dp),verticalAlignment=Alignment.CenterVertically){Surface(shape=MaterialTheme.shapes.extraLarge,color=MaterialTheme.colorScheme.secondaryContainer){Text(tx.payerName.take(2).uppercase(),Modifier.padding(12.dp),fontWeight=FontWeight.Bold)};Column(Modifier.weight(1f).padding(horizontal=12.dp)){Text(tx.payerName,fontWeight=FontWeight.Bold,style=MaterialTheme.typography.titleMedium);Text("${formatTime(tx.occurredAt)} · ${tx.paymentMethod}",color=MaterialTheme.colorScheme.onSurfaceVariant,style=MaterialTheme.typography.bodySmall)};Text(tx.amount?.let(::money)?:"Hidden",color=MaterialTheme.colorScheme.primary,fontWeight=FontWeight.Bold)}}}}}}
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun MobileHome(vm:MobileViewModel,openApprovals:()->Unit,openSettings:()->Unit){
+    val session=vm.session?:return
+    Scaffold(topBar={Surface(shadowElevation=2.dp){Row(Modifier.fillMaxWidth().statusBarsPadding().padding(horizontal=16.dp,vertical=12.dp),verticalAlignment=Alignment.CenterVertically){Column(Modifier.weight(1f)){K10Wordmark(MaterialTheme.typography.headlineMedium);Text("${session.displayName} · ${roleName(session.role)}",color=MaterialTheme.colorScheme.onSurfaceVariant)};if(session.developer)BadgedBox(badge={if(vm.pendingApprovals>0)Badge{Text(vm.pendingApprovals.coerceAtMost(99).toString())}}){IconButton(openApprovals){Text("●",color=MaterialTheme.colorScheme.primary,style=MaterialTheme.typography.titleLarge)}};IconButton(openSettings){Text("⚙",style=MaterialTheme.typography.titleLarge)}}}}){padding->
+        PullToRefreshBox(isRefreshing=vm.busy,onRefresh={vm.load(vm.range)},modifier=Modifier.fillMaxSize().padding(padding)){
+            LazyColumn(Modifier.fillMaxSize().padding(horizontal=16.dp),contentPadding=PaddingValues(vertical=16.dp),verticalArrangement=Arrangement.spacedBy(12.dp)){
+                item{AnimatedSummaryCard(vm.transactions.mapNotNull{it.amount}.sum(),vm.transactions.size,vm.range)}
+                item{Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(6.dp)){Range("Today",true,vm.range=="today",Modifier.weight(1f)){vm.load("today")};Range("15d",session.has("finance.slice.history15"),vm.range=="15d",Modifier.weight(1f)){vm.load("15d")};Range("30d",session.has("finance.slice.history30"),vm.range=="30d",Modifier.weight(1f)){vm.load("30d")};Range("All",session.has("finance.slice.historyLifetime"),vm.range=="all",Modifier.weight(1f)){vm.load("all")}}}
+                item{Text("Recent transactions",style=MaterialTheme.typography.titleLarge,fontWeight=FontWeight.Bold)}
+                if(vm.message.isNotBlank())item{Message(vm)}
+                if(!vm.busy&&vm.transactions.isEmpty())item{Text("No transactions in this range.",color=MaterialTheme.colorScheme.onSurfaceVariant,modifier=Modifier.padding(vertical=24.dp))}
+                items(vm.transactions,key={it.id}){tx->
+                    var visible by remember(tx.id){mutableStateOf(false)}
+                    LaunchedEffect(tx.id){visible=true}
+                    AnimatedVisibility(visible=visible,enter=fadeIn(tween(350))+slideInVertically(tween(350)){it/4}){
+                        Card(Modifier.fillMaxWidth()){Row(Modifier.padding(16.dp),verticalAlignment=Alignment.CenterVertically){Surface(shape=MaterialTheme.shapes.extraLarge,color=MaterialTheme.colorScheme.secondaryContainer){Text(tx.payerName.take(2).uppercase(),Modifier.padding(12.dp),fontWeight=FontWeight.Bold)};Column(Modifier.weight(1f).padding(horizontal=12.dp)){Text(tx.payerName,fontWeight=FontWeight.Bold,style=MaterialTheme.typography.titleMedium);Text("${formatTime(tx.occurredAt)} · ${tx.paymentMethod}",color=MaterialTheme.colorScheme.onSurfaceVariant,style=MaterialTheme.typography.bodySmall)};Text(tx.amount?.let(::money)?:money(0.0),color=MaterialTheme.colorScheme.primary,fontWeight=FontWeight.Bold)}}
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable private fun AnimatedSummaryCard(total:Double,count:Int,range:String){
+    val transition=rememberInfiniteTransition(label="account-card")
+    val start by transition.animateColor(Color(0xFF214977),Color(0xFF5330A8),infiniteRepeatable(tween(9000,easing=LinearEasing),RepeatMode.Reverse),label="card-start")
+    val end by transition.animateColor(Color(0xFF48239C),Color(0xFF164F78),infiniteRepeatable(tween(11000,easing=LinearEasing),RepeatMode.Reverse),label="card-end")
+    Card(Modifier.fillMaxWidth(),shape=RoundedCornerShape(22.dp)){
+        Row(Modifier.fillMaxWidth().background(Brush.linearGradient(listOf(start,end))).padding(20.dp),verticalAlignment=Alignment.CenterVertically){
+            Column(Modifier.weight(1f)){Text("K10 SLICE ACCOUNT",color=Color(0xFFD9E5FF),fontWeight=FontWeight.SemiBold,style=MaterialTheme.typography.labelLarge);Crossfade(targetState=money(total),label="total"){Text(it,color=Color.White,style=MaterialTheme.typography.headlineLarge,fontWeight=FontWeight.Bold)};Text("Received · ${rangeName(range)} · $count transaction(s)",color=Color(0xFFE3E8F5))}
+            Row(Modifier.height(54.dp),horizontalArrangement=Arrangement.spacedBy(5.dp),verticalAlignment=Alignment.Bottom){listOf(18,30,45).forEachIndexed{index,height->val pulse by transition.animateFloat(0.72f,1f,infiniteRepeatable(tween(1800+index*500,easing=EaseInOut),RepeatMode.Reverse),label="bar-$index");Box(Modifier.width(6.dp).height((height*pulse).dp).clip(RoundedCornerShape(5.dp)).background(Color(0xFF9FA8FF)))}}
+        }
+    }
+}
 
 @Composable
-private fun SettingsScreen(vm:MobileViewModel,themeMode:ThemeMode,onThemeModeChange:(ThemeMode)->Unit,back:()->Unit,bridge:()->Unit,exclusions:()->Unit,passwords:()->Unit,roles:()->Unit){
+private fun SettingsScreen(vm:MobileViewModel,themeMode:ThemeMode,onThemeModeChange:(ThemeMode)->Unit,back:()->Unit,bridge:()->Unit,scanSms:()->Unit,exclusions:()->Unit,passwords:()->Unit,roles:()->Unit){
     val session=vm.session?:return
     val preferences=session.notificationPreferences
     Scaffold(topBar={AppBar("Settings",back)}){padding->
@@ -113,7 +154,8 @@ private fun SettingsScreen(vm:MobileViewModel,themeMode:ThemeMode,onThemeModeCha
             }}
             if(session.developer)item{SettingsCard("Transaction collection","Rules remain strict for destination account xx7972."){
                 SettingsAction("Excluded payer names",onClick=exclusions)
-                SettingsAction("SMS bridge & matching rules",onClick=bridge)
+                SettingsAction("Scan existing SMS",detail="Recover older messages only",onClick=scanSms)
+                SettingsAction("SMS bridge diagnostics",detail="Connection, permissions and matching rules",onClick=bridge)
             }}
             item{SettingsCard("App updates","Secure updates are checked from the K10 Pay server."){
                 vm.availableUpdate?.let{Text("Version ${it.latestVersionName} is available",fontWeight=FontWeight.Bold);Button(vm::downloadUpdate,enabled=!vm.busy,modifier=Modifier.fillMaxWidth().padding(top=8.dp)){Text(if(vm.busy)"Downloading…" else "Download & install")}}?:OutlinedButton({vm.checkForUpdate()},enabled=!vm.busy,modifier=Modifier.fillMaxWidth()){Text("Check for updates")}
@@ -195,7 +237,20 @@ private fun ManagePasswordsScreen(vm:MobileViewModel,back:()->Unit){
     }
 }
 
-@Composable private fun ExclusionsScreen(vm:MobileViewModel,back:()->Unit){var value by remember(vm.exclusions){mutableStateOf(vm.exclusions)};Scaffold(topBar={AppBar("Excluded payers",back)}){padding->Column(Modifier.padding(padding).padding(16.dp)){Text("Transactions from these exact names are blocked from speech, notifications, history and totals.",color=MaterialTheme.colorScheme.onSurfaceVariant);OutlinedTextField(value,{value=it},label={Text("Names separated by commas")},minLines=4,modifier=Modifier.fillMaxWidth().padding(vertical=12.dp));Button({vm.saveExclusions(value)},enabled=!vm.busy,modifier=Modifier.fillMaxWidth()){Text(if(vm.busy)"Saving…"else"Save exclusions")};Message(vm)}}}
+@Composable private fun ExclusionsScreen(vm:MobileViewModel,back:()->Unit){
+    var value by remember{mutableStateOf("")}
+    LaunchedEffect(Unit){vm.loadExclusions(false)}
+    Scaffold(topBar={AppBar("Excluded payer names",back)}){padding->
+        LazyColumn(Modifier.fillMaxSize().padding(padding),contentPadding=PaddingValues(16.dp),verticalArrangement=Arrangement.spacedBy(12.dp)){
+            item{Text("Only names found in qualified account-7972 transactions can be added. Their transactions stay stored for audit, but are hidden from totals, history, voice and alerts.",color=MaterialTheme.colorScheme.onSurfaceVariant)}
+            item{OutlinedTextField(value,{value=it.take(100)},label={Text("Qualified payer name")},singleLine=true,modifier=Modifier.fillMaxWidth());Button({vm.addExcludedPayer(value);value=""},enabled=!vm.busy&&value.isNotBlank(),modifier=Modifier.fillMaxWidth().padding(top=8.dp)){Text(if(vm.busy)"Saving…" else "Add to excluded list")}}
+            if(vm.message.isNotBlank())item{Message(vm)}
+            item{Text("Excluded names",style=MaterialTheme.typography.titleLarge,fontWeight=FontWeight.Bold)}
+            if(vm.excludedPayers.isEmpty()&&!vm.busy)item{Text("No qualified payer names are excluded.",color=MaterialTheme.colorScheme.onSurfaceVariant)}
+            items(vm.excludedPayers,key={it.name.lowercase()}){payer->Card(Modifier.fillMaxWidth()){Row(Modifier.fillMaxWidth().padding(16.dp),verticalAlignment=Alignment.CenterVertically){Column(Modifier.weight(1f)){Text(payer.name,fontWeight=FontWeight.Bold,style=MaterialTheme.typography.titleMedium);Text(if(payer.transactionCount==1)"1 matching transaction" else "${payer.transactionCount} matching transactions",color=MaterialTheme.colorScheme.onSurfaceVariant);if(payer.lastSeenAt.isNotBlank())Text("Latest: ${formatTime(payer.lastSeenAt)}",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)};TextButton({vm.removeExcludedPayer(payer.name)},enabled=!vm.busy){Text("Remove")}}}}
+        }
+    }
+}
 
 @Composable private fun K10Wordmark(style:androidx.compose.ui.text.TextStyle){Row(verticalAlignment=Alignment.CenterVertically){Text("K10",style=style,fontWeight=FontWeight.Bold,color=MaterialTheme.colorScheme.onBackground);Text(" Pay",style=style,fontWeight=FontWeight.Bold,color=MaterialTheme.colorScheme.primary)}}
 @Composable private fun AppBar(title:String,back:()->Unit){Surface(shadowElevation=2.dp){Row(Modifier.fillMaxWidth().statusBarsPadding().padding(horizontal=10.dp,vertical=8.dp),verticalAlignment=Alignment.CenterVertically){TextButton(back){Text("‹ Back")};Text(title,style=MaterialTheme.typography.headlineSmall,fontWeight=FontWeight.Bold)}}}
