@@ -63,10 +63,11 @@ import java.util.Locale
 private enum class Screen { HOME, LOG, SEARCH, SETTINGS }
 
 @Composable
-fun BridgeApp(vm: BridgeViewModel = viewModel()) {
-    var screen by remember { mutableStateOf(Screen.HOME) }
+fun BridgeApp(initialScreen: String = "settings", exit: () -> Unit = {}, vm: BridgeViewModel = viewModel()) {
+    val start = if (initialScreen == "search") Screen.SEARCH else Screen.SETTINGS
+    var screen by remember(initialScreen) { mutableStateOf(start) }
     val snackbarHostState = remember { SnackbarHostState() }
-    BackHandler(enabled = screen != Screen.HOME) { screen = Screen.HOME }
+    BackHandler { if (screen == start) exit() else screen = start }
     LaunchedEffect(vm.messageVersion) {
         if (vm.messageVersion > 0 && vm.message.isNotBlank()) snackbarHostState.showSnackbar(vm.message)
     }
@@ -87,9 +88,9 @@ fun BridgeApp(vm: BridgeViewModel = viewModel()) {
             Column(pageModifier.animateContentSize()) {
                 when (currentScreen) {
                     Screen.HOME -> HomeScreen(vm, { screen = Screen.LOG }, { screen = Screen.SEARCH }, { screen = Screen.SETTINGS })
-                    Screen.LOG -> TransactionLog(vm) { screen = Screen.HOME }
-                    Screen.SEARCH -> SearchSmsScreen(vm) { screen = Screen.HOME }
-                    Screen.SETTINGS -> SettingsScreen(vm) { screen = Screen.HOME }
+                    Screen.LOG -> TransactionLog(vm) { screen = start }
+                    Screen.SEARCH -> SearchSmsScreen(vm) { if (start == Screen.SEARCH) exit() else screen = start }
+                    Screen.SETTINGS -> SettingsScreen(vm) { if (start == Screen.SETTINGS) exit() else screen = start }
                 }
             }
         }
