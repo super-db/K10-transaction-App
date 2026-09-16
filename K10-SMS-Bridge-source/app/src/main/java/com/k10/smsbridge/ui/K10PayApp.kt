@@ -86,7 +86,50 @@ private fun AuthScreen(vm:MobileViewModel,dark:Boolean,toggle:()->Unit){
 
 @Composable private fun ApprovalScreen(vm:MobileViewModel,back:()->Unit){LaunchedEffect(Unit){vm.refreshApprovals(false)};Scaffold(topBar={AppBar("Approval inbox",back)}){padding->LazyColumn(Modifier.fillMaxSize().padding(padding),contentPadding=PaddingValues(16.dp),verticalArrangement=Arrangement.spacedBy(10.dp)){item{Text("New staff accounts remain blocked until you approve them.",color=MaterialTheme.colorScheme.onSurfaceVariant)};if(vm.busy)item{LinearProgressIndicator(Modifier.fillMaxWidth())};if(vm.requests.isEmpty())item{Card(Modifier.fillMaxWidth()){Text("No pending staff requests",Modifier.padding(20.dp),color=MaterialTheme.colorScheme.onSurfaceVariant)}};items(vm.requests,key={it.id}){request->Card(Modifier.fillMaxWidth()){Column(Modifier.padding(16.dp)){Text(request.name,style=MaterialTheme.typography.titleLarge,fontWeight=FontWeight.Bold);Text(request.phone);Text(request.email,color=MaterialTheme.colorScheme.onSurfaceVariant);Row(Modifier.fillMaxWidth().padding(top=12.dp),horizontalArrangement=Arrangement.spacedBy(8.dp)){Button({vm.review(request.id,true)},Modifier.weight(1f),enabled=!vm.busy){Text("Approve")};OutlinedButton({vm.review(request.id,false)},Modifier.weight(1f),enabled=!vm.busy){Text("Reject")}}}}};if(vm.message.isNotBlank())item{Message(vm)}}}}
 
-@Composable private fun ManagePasswordsScreen(vm:MobileViewModel,back:()->Unit){var current by remember{mutableStateOf("")};var next by remember{mutableStateOf("")};var target by remember{mutableStateOf<ManagedAccount?>(null)};var temporary by remember{mutableStateOf("")};Scaffold(topBar={AppBar("Manage password",back)}){padding->LazyColumn(Modifier.fillMaxSize().padding(padding),contentPadding=PaddingValues(16.dp),verticalArrangement=Arrangement.spacedBy(12.dp)){item{SettingsCard("Change my password","Changing it signs out all existing sessions."){PasswordField(current,{current=it},"Current password");Spacer(Modifier.height(8.dp));PasswordField(next,{next=it},"New password (minimum 8 characters)");Button({vm.changePassword(current,next){ }},enabled=!vm.busy&&current.isNotBlank()&&next.length>=8,modifier=Modifier.fillMaxWidth().padding(top=10.dp)){Text("Change my password")}}};if(vm.session?.developer==true){item{Text("Reset staff password",style=MaterialTheme.typography.titleLarge,fontWeight=FontWeight.Bold);Text("This revokes the staff member's sessions and requires them to change the temporary password next time.",color=MaterialTheme.colorScheme.onSurfaceVariant)};items(vm.managedAccounts.filter{it.role!="developer"},key={it.id}){account->Card(Modifier.fillMaxWidth()){Column(Modifier.padding(16.dp)){Text(account.name,fontWeight=FontWeight.Bold);Text(if(account.phone.isBlank())account.email else account.phone,color=MaterialTheme.colorScheme.onSurfaceVariant);OutlinedButton({target=account},Modifier.fillMaxWidth().padding(top=8.dp)){Text("Set temporary password")}}}}};if(vm.message.isNotBlank())item{Message(vm)}}};if(target!=null)AlertDialog(onDismissRequest={target=null},title={Text("Reset ${target!!.name}")},text={Column{Text("Enter a temporary password. They must replace it after signing in.");PasswordField(temporary,{temporary=it},"Temporary password")}},confirmButton={Button({vm.adminReset(target!!.id,temporary);target=null;temporary=""},enabled=temporary.length>=8){Text("Reset password")}},dismissButton={TextButton({target=null}){Text("Cancel")}})}}
+@Composable
+private fun ManagePasswordsScreen(vm:MobileViewModel,back:()->Unit){
+    var current by remember{mutableStateOf("")}
+    var next by remember{mutableStateOf("")}
+    var target by remember{mutableStateOf<ManagedAccount?>(null)}
+    var temporary by remember{mutableStateOf("")}
+    Scaffold(topBar={AppBar("Manage password",back)}){padding->
+        LazyColumn(Modifier.fillMaxSize().padding(padding),contentPadding=PaddingValues(16.dp),verticalArrangement=Arrangement.spacedBy(12.dp)){
+            item{
+                SettingsCard("Change my password","Changing it signs out all existing sessions."){
+                    PasswordField(current,{current=it},"Current password")
+                    Spacer(Modifier.height(8.dp))
+                    PasswordField(next,{next=it},"New password (minimum 8 characters)")
+                    Button({vm.changePassword(current,next){ }},enabled=!vm.busy&&current.isNotBlank()&&next.length>=8,modifier=Modifier.fillMaxWidth().padding(top=10.dp)){Text("Change my password")}
+                }
+            }
+            if(vm.session?.developer==true){
+                item{
+                    Text("Reset staff password",style=MaterialTheme.typography.titleLarge,fontWeight=FontWeight.Bold)
+                    Text("This revokes the staff member's sessions and requires them to change the temporary password next time.",color=MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                items(vm.managedAccounts.filter{it.role!="developer"},key={it.id}){account->
+                    Card(Modifier.fillMaxWidth()){
+                        Column(Modifier.padding(16.dp)){
+                            Text(account.name,fontWeight=FontWeight.Bold)
+                            Text(if(account.phone.isBlank())account.email else account.phone,color=MaterialTheme.colorScheme.onSurfaceVariant)
+                            OutlinedButton({target=account},Modifier.fillMaxWidth().padding(top=8.dp)){Text("Set temporary password")}
+                        }
+                    }
+                }
+            }
+            if(vm.message.isNotBlank())item{Message(vm)}
+        }
+    }
+    target?.let{account->
+        AlertDialog(
+            onDismissRequest={target=null},
+            title={Text("Reset ${account.name}")},
+            text={Column{Text("Enter a temporary password. They must replace it after signing in.");PasswordField(temporary,{temporary=it},"Temporary password")}},
+            confirmButton={Button({vm.adminReset(account.id,temporary);target=null;temporary=""},enabled=temporary.length>=8){Text("Reset password")}},
+            dismissButton={TextButton({target=null}){Text("Cancel")}}
+        )
+    }
+}
 
 @Composable private fun ExclusionsScreen(vm:MobileViewModel,back:()->Unit){var value by remember(vm.exclusions){mutableStateOf(vm.exclusions)};Scaffold(topBar={AppBar("Excluded payers",back)}){padding->Column(Modifier.padding(padding).padding(16.dp)){Text("Transactions from these exact names are blocked from speech, notifications, history and totals.",color=MaterialTheme.colorScheme.onSurfaceVariant);OutlinedTextField(value,{value=it},label={Text("Names separated by commas")},minLines=4,modifier=Modifier.fillMaxWidth().padding(vertical=12.dp));Button({vm.saveExclusions(value)},enabled=!vm.busy,modifier=Modifier.fillMaxWidth()){Text(if(vm.busy)"Saving…"else"Save exclusions")};Message(vm)}}}
 
