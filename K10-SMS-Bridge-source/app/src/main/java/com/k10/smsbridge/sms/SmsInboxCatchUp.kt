@@ -51,8 +51,13 @@ object SmsInboxCatchUp {
                     val entity = parsed.toEntity()
                     if (dao.insert(entity) != -1L) {
                         added++
-                        Graph.announcer.announceReceived(entity.amountMinor)
-                        Graph.notifier.notifyReceived(entity.amountMinor, entity.payerName, entity.uniqueLocalId)
+                        val preferences = Graph.mobileSession.load()?.notificationPreferences
+                        if (!parsed.payerExcluded && preferences?.voiceAnnouncements != false) {
+                            Graph.announcer.announceReceived(entity.amountMinor)
+                        }
+                        if (!parsed.payerExcluded && preferences?.transactionAlerts != false) {
+                            Graph.notifier.notifyReceived(entity.amountMinor, entity.payerName, entity.uniqueLocalId)
+                        }
                     }
                 }
             }

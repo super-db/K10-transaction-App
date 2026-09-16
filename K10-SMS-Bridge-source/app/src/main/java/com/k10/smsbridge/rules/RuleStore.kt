@@ -20,10 +20,12 @@ class RuleStore(context: Context) {
 
     fun applyRemote(jsonText: String): Result<RuleConfig> = runCatching {
         require(jsonText.toByteArray().size <= 32_768) { "Configuration exceeds 32 KiB" }
-        val candidate = RuleConfig.fromJson(JSONObject(jsonText))
+        val active = current()
+        // Payer exclusions are managed by K10 Pay's dedicated server endpoint.
+        // Matching-rule updates must never silently reintroduce an old hard-coded name.
+        val candidate = RuleConfig.fromJson(JSONObject(jsonText)).copy(excludedPayerNames = active.excludedPayerNames)
         val errors = RuleValidator.validate(candidate)
         require(errors.isEmpty()) { errors.joinToString("; ") }
-        val active = current()
         require(isNewer(candidate.version, active.version) || candidate == active) {
             "Configuration must have a newer version; an existing version cannot be replaced"
         }
@@ -54,6 +56,11 @@ class RuleStore(context: Context) {
             .putBoolean(KEY_SERVICE_ENABLED, value.serviceEnabled)
             .putString(KEY_RULES, updated.toJson().toString())
             .apply()
+    }
+
+    fun setExcludedPayers(names: List<String>) {
+        val updated = current().copy(excludedPayerNames = names.map { it.trim() }.filter { it.isNotBlank() }.distinctBy { it.lowercase() })
+        prefs.edit().putString(KEY_RULES, updated.toJson().toString()).apply()
     }
 
     private fun isNewer(candidate: String, active: String): Boolean {

@@ -19,10 +19,14 @@ import com.k10.smsbridge.sms.SmsSearchRepository
 import com.k10.smsbridge.sync.BackendClient
 import com.k10.smsbridge.sync.SyncWorker
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
 class BridgeViewModel(app: Application) : AndroidViewModel(app) {
-    val transactions: Flow<List<TransactionEntity>> = Graph.database.transactions().observeAll()
+    val transactions: Flow<List<TransactionEntity>> = Graph.database.transactions().observeAll().map { rows ->
+        val excluded = Graph.rules.current().excludedPayerNames.map { it.trim().lowercase() }.toSet()
+        rows.filter { it.syncStatus != "EXCLUDED" && it.payerName.trim().lowercase() !in excluded }
+    }
     val pendingCount: Flow<Int> = Graph.database.transactions().observeCount("PENDING")
     val failedCount: Flow<Int> = Graph.database.transactions().observeCount("FAILED")
     val todayCount: Flow<Int> = Graph.database.transactions().observeDetectedSince(

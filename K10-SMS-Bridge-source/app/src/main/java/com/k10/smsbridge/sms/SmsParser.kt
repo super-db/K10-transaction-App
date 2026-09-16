@@ -23,7 +23,8 @@ data class ParsedSms(
     val accountLast4: String,
     val paymentMethod: String,
     val senderId: String,
-    val rawEligibleSms: String
+    val rawEligibleSms: String,
+    val payerExcluded: Boolean = false
 )
 
 data class ParseResult(val transaction: ParsedSms?, val reason: String) {
@@ -57,9 +58,7 @@ object SmsParser {
 
         val payer = captureFromTemplates(body, rules.payerPatterns, "{payer}", "[\\p{L}][\\p{L} .'-]{0,79}")
             ?.trim()?.trimEnd('.') ?: "Unknown payer"
-        if (rules.excludedPayerNames.any { normalizePayer(it) == normalizePayer(payer) }) {
-            return ParseResult(null, "Payer is excluded by K10 rules")
-        }
+        val payerExcluded = rules.excludedPayerNames.any { normalizePayer(it) == normalizePayer(payer) }
         val dateText = captureFromTemplates(body, rules.datePatterns, "{date}", "[0-9]{1,2}(?:[ ./-][A-Za-z]{3,9}|[./-][0-9]{1,2})(?:[ ./-][0-9]{2,4})?")
         val transactionDate = dateText?.let { parseDate(it, receivedAt) }
             ?: Instant.ofEpochMilli(receivedAt).atZone(ZoneId.systemDefault()).toLocalDate()
@@ -76,9 +75,10 @@ object SmsParser {
                 accountLast4 = rules.accountLast4,
                 paymentMethod = method,
                 senderId = normalizedSender,
-                rawEligibleSms = body
+                rawEligibleSms = body,
+                payerExcluded = payerExcluded
             ),
-            "Eligible"
+            if (payerExcluded) "Eligible transaction from an excluded payer" else "Eligible"
         )
     }
 
