@@ -41,7 +41,7 @@ class TransactionNotifier(private val context: Context) {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.stat_notify_more)
+            .setSmallIcon(com.k10.smsbridge.R.drawable.ic_k10_notification)
             .setContentTitle("Payment received${payerName.takeIf { it.isNotBlank() && it != "Unknown payer" }?.let { " from $it" }.orEmpty()}")
             .setContentText(message)
             .setStyle(NotificationCompat.BigTextStyle().bigText(message))

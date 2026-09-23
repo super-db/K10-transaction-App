@@ -17,6 +17,7 @@ import com.k10.smsbridge.sync.SyncWorker
 import com.k10.smsbridge.voice.TransactionAnnouncer
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.MutableSharedFlow
 import java.util.concurrent.TimeUnit
 
 class K10Application : Application() {
@@ -48,6 +49,7 @@ object Graph {
     lateinit var notifier: TransactionNotifier
     lateinit var mobileSession: MobileSessionStore
     val appScope = CoroutineScope(SupervisorJob())
+    val transactionEvents = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
 
     fun init(app: Application) {
         database = AppDatabase.create(app)

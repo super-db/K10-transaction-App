@@ -19,8 +19,8 @@ android {
         applicationId = "com.k10.smsbridge"
         minSdk = 26
         targetSdk = 35
-        versionCode = providers.environmentVariable("K10_VERSION_CODE").orNull?.toIntOrNull() ?: 11
-        versionName = providers.environmentVariable("K10_VERSION_NAME").orNull ?: "4.1.0"
+        versionCode = providers.environmentVariable("K10_VERSION_CODE").orNull?.toIntOrNull() ?: 13
+        versionName = providers.environmentVariable("K10_VERSION_NAME").orNull ?: "4.3.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -67,6 +67,7 @@ dependencies {
     implementation("androidx.activity:activity-compose:1.10.0")
     implementation("androidx.core:core-ktx:1.15.0")
     implementation("androidx.compose.material3:material3")
+    implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.compose.animation:animation")
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-tooling-preview")

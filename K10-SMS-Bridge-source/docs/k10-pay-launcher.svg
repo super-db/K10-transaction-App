@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#081B3E"/>
+      <stop offset="0.55" stop-color="#173F79"/>
+      <stop offset="1" stop-color="#5632B5"/>
+    </linearGradient>
+  </defs>
+  <rect width="1024" height="1024" rx="224" fill="url(#bg)"/>
+  <circle cx="512" cy="355" r="174" fill="#FFFFFF" opacity="0.10"/>
+  <path d="M382 292h260c31 0 56 25 56 56v152c0 31-25 56-56 56H382c-31 0-56-25-56-56V348c0-31 25-56 56-56z" fill="none" stroke="#FFFFFF" stroke-width="42"/>
+  <path d="M564 370h150v108H564c-30 0-54-24-54-54s24-54 54-54z" fill="#9DBBFF"/>
+  <circle cx="579" cy="424" r="17" fill="#173F79"/>
+  <text x="512" y="725" text-anchor="middle" font-family="DejaVu Sans, sans-serif" font-size="154" font-weight="700" fill="#FFFFFF">K10</text>
+  <text x="512" y="855" text-anchor="middle" font-family="DejaVu Sans, sans-serif" font-size="116" font-weight="700" fill="#AFC7FF">Pay</text>
+</svg>
