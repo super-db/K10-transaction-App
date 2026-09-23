@@ -1,0 +1,153 @@
+name: Publish signed K10 Pay APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      version_code:
+        description: Android version code (must increase)
+        required: true
+        type: number
+      version_name:
+        description: Public version name, for example 4.2.0
+        required: true
+        type: string
+      release_notes:
+        description: Short note shown in the app
+        required: false
+        type: string
+      mandatory:
+        description: Require users to install this update
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: k10-pay-release
+  cancel-in-progress: false
+
+jobs:
+  build-sign-publish:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: K10-SMS-Bridge-source
+    env:
+      K10_VERSION_CODE: ${{ inputs.version_code }}
+      K10_VERSION_NAME: ${{ inputs.version_name }}
+      K10_RELEASE_KEYSTORE_PASSWORD: ${{ secrets.K10_RELEASE_KEYSTORE_PASSWORD }}
+      K10_RELEASE_KEY_ALIAS: k10pay
+      R2_BUCKET: k10-pay-releases
+      PUBLIC_BASE_URL: https://downloads.k10classes.com
+      AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: auto
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      - name: Validate release inputs
+        env:
+          KEYSTORE_BASE64: ${{ secrets.K10_RELEASE_KEYSTORE_BASE64 }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          test "$K10_VERSION_CODE" -gt 11
+          [[ "$K10_VERSION_NAME" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-.][A-Za-z0-9.]+)?$ ]]
+          test -n "$KEYSTORE_BASE64"
+          test -n "$K10_RELEASE_KEYSTORE_PASSWORD"
+          test -n "$AWS_ACCESS_KEY_ID"
+          test -n "$AWS_SECRET_ACCESS_KEY"
+          test -n "$CLOUDFLARE_ACCOUNT_ID"
+
+      - name: Restore release keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.K10_RELEASE_KEYSTORE_BASE64 }}
+        run: |
+          set -euo pipefail
+          K10_RELEASE_STORE_FILE="$RUNNER_TEMP/k10-pay-release.jks"
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$K10_RELEASE_STORE_FILE"
+          chmod 600 "$K10_RELEASE_STORE_FILE"
+          echo "K10_RELEASE_STORE_FILE=$K10_RELEASE_STORE_FILE" >> "$GITHUB_ENV"
+
+      - name: Test and build signed release
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon testReleaseUnitTest assembleRelease
+
+      - name: Verify signature and prepare files
+        id: package
+        env:
+          RELEASE_NOTES: ${{ inputs.release_notes }}
+          MANDATORY: ${{ inputs.mandatory }}
+        run: |
+          set -euo pipefail
+          SOURCE_APK="app/build/outputs/apk/release/app-release.apk"
+          RELEASE_DIR="build/release-output"
+          APK_NAME="K10-Pay-v${K10_VERSION_NAME}.apk"
+          mkdir -p "$RELEASE_DIR"
+          cp "$SOURCE_APK" "$RELEASE_DIR/$APK_NAME"
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs "$RELEASE_DIR/$APK_NAME"
+          SHA256="$(sha256sum "$RELEASE_DIR/$APK_NAME" | awk '{print $1}')"
+          jq -n \
+            --argjson latestVersionCode "$K10_VERSION_CODE" \
+            --arg latestVersionName "$K10_VERSION_NAME" \
+            --argjson mandatory "$MANDATORY" \
+            --arg downloadUrl "$PUBLIC_BASE_URL/k10-pay/$APK_NAME" \
+            --arg sha256 "$SHA256" \
+            --arg releaseNotes "$RELEASE_NOTES" \
+            '{
+              platform: "android",
+              latestVersionCode: $latestVersionCode,
+              latestVersionName: $latestVersionName,
+              minimumSupportedVersionCode: 11,
+              mandatory: $mandatory,
+              downloadUrl: $downloadUrl,
+              sha256: $sha256,
+              releaseNotes: (if $releaseNotes == "" then [] else [$releaseNotes] end)
+            }' > "$RELEASE_DIR/latest.json"
+          echo "apk_name=$APK_NAME" >> "$GITHUB_OUTPUT"
+          echo "sha256=$SHA256" >> "$GITHUB_OUTPUT"
+
+      - name: Upload APK and manifest to Cloudflare R2
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          ENDPOINT="https://${CLOUDFLARE_ACCOUNT_ID}.r2.cloudflarestorage.com"
+          RELEASE_DIR="build/release-output"
+          aws s3 cp "$RELEASE_DIR/${{ steps.package.outputs.apk_name }}" "s3://$R2_BUCKET/k10-pay/${{ steps.package.outputs.apk_name }}" \
+            --endpoint-url "$ENDPOINT" \
+            --content-type "application/vnd.android.package-archive" \
+            --cache-control "public,max-age=31536000,immutable"
+          aws s3 cp "$RELEASE_DIR/latest.json" "s3://$R2_BUCKET/k10-pay/latest.json" \
+            --endpoint-url "$ENDPOINT" \
+            --content-type "application/json" \
+            --cache-control "no-cache,no-store,must-revalidate"
+
+      - name: Upload signed APK as workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: K10-Pay-v${{ inputs.version_name }}-signed
+          path: |
+            K10-SMS-Bridge-source/build/release-output/*.apk
+            K10-SMS-Bridge-source/build/release-output/latest.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Release summary
+        run: |
+          {
+            echo "## K10 Pay v${K10_VERSION_NAME}"
+            echo "- Signed APK: ${{ steps.package.outputs.apk_name }}"
+            echo "- SHA-256: ${{ steps.package.outputs.sha256 }}"
+            echo "- Download: $PUBLIC_BASE_URL/k10-pay/${{ steps.package.outputs.apk_name }}"
+            echo "- Manifest: $PUBLIC_BASE_URL/k10-pay/latest.json"
+          } >> "$GITHUB_STEP_SUMMARY"

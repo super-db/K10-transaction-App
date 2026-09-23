@@ -6,6 +6,10 @@ plugins {
     id("com.google.gms.google-services")
 }
 
+val releaseStorePath = providers.environmentVariable("K10_RELEASE_STORE_FILE").orNull
+val releaseStorePassword = providers.environmentVariable("K10_RELEASE_KEYSTORE_PASSWORD").orNull
+val releaseKeyAlias = providers.environmentVariable("K10_RELEASE_KEY_ALIAS").orElse("k10pay").get()
+
 android {
     namespace = "com.k10.smsbridge"
     compileSdk = 35
@@ -15,9 +19,20 @@ android {
         applicationId = "com.k10.smsbridge"
         minSdk = 26
         targetSdk = 35
-        versionCode = 11
-        versionName = "4.1.0"
+        versionCode = providers.environmentVariable("K10_VERSION_CODE").orNull?.toIntOrNull() ?: 11
+        versionName = providers.environmentVariable("K10_VERSION_NAME").orNull ?: "4.1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    signingConfigs {
+        if (releaseStorePath != null && releaseStorePassword != null) {
+            create("release") {
+                storeFile = file(releaseStorePath)
+                storePassword = releaseStorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseStorePassword
+            }
+        }
     }
 
     buildFeatures {
@@ -35,6 +50,9 @@ android {
         release {
             isMinifyEnabled = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            if (releaseStorePath != null && releaseStorePassword != null) {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
     }
 }
