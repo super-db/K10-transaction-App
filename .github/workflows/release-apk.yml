@@ -41,9 +41,9 @@ jobs:
       K10_RELEASE_KEY_ALIAS: k10pay
       R2_BUCKET: k10-pay-releases
       PUBLIC_BASE_URL: https://downloads.k10classes.com
-      AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-      AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
       AWS_DEFAULT_REGION: auto
+      AWS_REQUEST_CHECKSUM_CALCULATION: WHEN_REQUIRED
+      AWS_RESPONSE_CHECKSUM_VALIDATION: WHEN_REQUIRED
     steps:
       - uses: actions/checkout@v4
 
@@ -57,14 +57,16 @@ jobs:
         env:
           KEYSTORE_BASE64: ${{ secrets.K10_RELEASE_KEYSTORE_BASE64 }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
         run: |
           set -euo pipefail
           test "$K10_VERSION_CODE" -gt 11
           [[ "$K10_VERSION_NAME" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-.][A-Za-z0-9.]+)?$ ]]
           test -n "$KEYSTORE_BASE64"
           test -n "$K10_RELEASE_KEYSTORE_PASSWORD"
-          test -n "$AWS_ACCESS_KEY_ID"
-          test -n "$AWS_SECRET_ACCESS_KEY"
+          test -n "$R2_ACCESS_KEY_ID"
+          test -n "$R2_SECRET_ACCESS_KEY"
           test -n "$CLOUDFLARE_ACCOUNT_ID"
 
       - name: Restore release keystore
@@ -119,8 +121,14 @@ jobs:
       - name: Upload APK and manifest to Cloudflare R2
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          RAW_R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          RAW_R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
         run: |
           set -euo pipefail
+          export AWS_ACCESS_KEY_ID="$(printf '%s' "$RAW_R2_ACCESS_KEY_ID" | tr -d '[:space:]')"
+          export AWS_SECRET_ACCESS_KEY="$(printf '%s' "$RAW_R2_SECRET_ACCESS_KEY" | tr -d '[:space:]')"
+          test -n "$AWS_ACCESS_KEY_ID"
+          test -n "$AWS_SECRET_ACCESS_KEY"
           ENDPOINT="https://${CLOUDFLARE_ACCOUNT_ID}.r2.cloudflarestorage.com"
           RELEASE_DIR="build/release-output"
           aws s3 cp "$RELEASE_DIR/${{ steps.package.outputs.apk_name }}" "s3://$R2_BUCKET/k10-pay/${{ steps.package.outputs.apk_name }}" \
@@ -133,6 +141,7 @@ jobs:
             --cache-control "no-cache,no-store,must-revalidate"
 
       - name: Upload signed APK as workflow artifact
+        if: ${{ always() && steps.package.outcome == 'success' }}
         uses: actions/upload-artifact@v4
         with:
           name: K10-Pay-v${{ inputs.version_name }}-signed
@@ -143,6 +152,7 @@ jobs:
           retention-days: 30
 
       - name: Release summary
+        if: ${{ always() && steps.package.outcome == 'success' }}
         run: |
           {
             echo "## K10 Pay v${K10_VERSION_NAME}"
