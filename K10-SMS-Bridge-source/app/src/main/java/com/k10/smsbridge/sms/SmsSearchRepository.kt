@@ -25,7 +25,8 @@ data class SmsSearchItem(
     val parseResult: ParseResult,
     val alreadyAdded: Boolean,
     val localStatus: String? = null,
-    val localId: String? = null
+    val localId: String? = null,
+    val serverMessage: String? = null
 )
 
 class SmsSearchRepository(private val context: Context, private val dao: TransactionDao) {
@@ -58,7 +59,7 @@ class SmsSearchRepository(private val context: Context, private val dao: Transac
                 val parsed = SmsParser.parse(sender, body, receivedAt, rules)
                 if (filters.eligibleOnly && !parsed.eligible) continue
                 val duplicate = parsed.transaction?.let { dao.findDuplicate(it.duplicateKey) }
-                results += SmsSearchItem(sender, body, receivedAt, parsed, duplicate != null, duplicate?.syncStatus, duplicate?.uniqueLocalId)
+                results += SmsSearchItem(sender, body, receivedAt, parsed, duplicate != null, duplicate?.syncStatus, duplicate?.uniqueLocalId, duplicate?.serverMessage)
             }
         }
         results

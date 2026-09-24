@@ -39,7 +39,9 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
         }
 
         var temporaryFailures = 0
-        var permanentFailures = 0
+        var authenticationFailures = 0
+        var unexpectedFailures = 0
+        var rejected = 0
         var cloudStateChanged = false
         var synced = 0
         var duplicates = 0
@@ -61,7 +63,8 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
                         "SYNCED" -> synced++
                         "DUPLICATE" -> duplicates++
                         "EXCLUDED" -> excluded++
-                        else -> permanentFailures++
+                        "REJECTED" -> rejected++
+                        "FAILED" -> if (response.status.equals("authentication_error", true)) authenticationFailures++ else unexpectedFailures++
                     }
                     if (localStatus != "FAILED") cloudStateChanged = true
                 }
@@ -77,10 +80,18 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
             .putInt(OUTPUT_SYNCED, synced)
             .putInt(OUTPUT_DUPLICATES, duplicates)
             .putInt(OUTPUT_EXCLUDED, excluded)
-            .putInt(OUTPUT_FAILED, temporaryFailures + permanentFailures)
+            .putInt(OUTPUT_REJECTED, rejected)
+            .putInt(OUTPUT_FAILED, temporaryFailures + authenticationFailures + unexpectedFailures)
+            .apply {
+                when {
+                    authenticationFailures > 0 -> putString(OUTPUT_ERROR, "Authentication failed. Re-save the SMS Bridge API token.")
+                    temporaryFailures > 0 -> putString(OUTPUT_ERROR, "The server could not be reached. Check the internet connection and retry.")
+                    unexpectedFailures > 0 -> putString(OUTPUT_ERROR, "The server returned an unexpected sync response.")
+                }
+            }
             .build()
         return when {
-            temporaryFailures + permanentFailures == 0 -> Result.success(output)
+            temporaryFailures + authenticationFailures + unexpectedFailures == 0 -> Result.success(output)
             interactive -> Result.failure(output)
             temporaryFailures > 0 -> Result.retry()
             else -> Result.failure(output)
@@ -107,6 +118,7 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
         const val OUTPUT_SYNCED = "synced"
         const val OUTPUT_DUPLICATES = "duplicates"
         const val OUTPUT_EXCLUDED = "excluded"
+        const val OUTPUT_REJECTED = "rejected"
         const val OUTPUT_FAILED = "failed"
         const val OUTPUT_ERROR = "error"
     }
