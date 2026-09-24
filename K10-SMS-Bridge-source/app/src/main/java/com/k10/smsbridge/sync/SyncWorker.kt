@@ -12,9 +12,9 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
         val settings = Graph.rules.settings()
         if (!settings.serviceEnabled) return Result.success()
 
-        val interactive = inputData.getBoolean(KEY_INTERACTIVE)
-        val fullHistory = inputData.getBoolean(KEY_FULL_HISTORY)
-        val recheckAll = inputData.getBoolean(KEY_RECHECK_ALL)
+        val interactive = inputData.getBoolean(KEY_INTERACTIVE, false)
+        val fullHistory = inputData.getBoolean(KEY_FULL_HISTORY, false)
+        val recheckAll = inputData.getBoolean(KEY_RECHECK_ALL, false)
         val dao = Graph.database.transactions()
         val rules = Graph.rules.current()
         val scanned = SmsInboxCatchUp.importMissed(applicationContext, rules, dao, fullHistory)

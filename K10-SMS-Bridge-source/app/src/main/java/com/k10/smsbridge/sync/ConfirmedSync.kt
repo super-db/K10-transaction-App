@@ -7,10 +7,10 @@ import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
-import androidx.work.getWorkInfoByIdFlow
 import androidx.work.workDataOf
-import kotlinx.coroutines.flow.filterNotNull
-import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 
 data class ConfirmedSyncResult(
     val successful: Boolean,
@@ -41,7 +41,12 @@ object ConfirmedSync {
             .build()
         val workManager = WorkManager.getInstance(context)
         workManager.enqueueUniqueWork(SyncWorker.USER_SYNC_NAME, ExistingWorkPolicy.REPLACE, request)
-        val info = workManager.getWorkInfoByIdFlow(request.id).filterNotNull().first { it.state.isFinished }
+        var info: WorkInfo
+        while (true) {
+            info = withContext(Dispatchers.IO) { workManager.getWorkInfoById(request.id).get() }
+            if (info.state.isFinished) break
+            delay(150)
+        }
         val data = info.outputData
         return ConfirmedSyncResult(
             successful = info.state == WorkInfo.State.SUCCEEDED,
