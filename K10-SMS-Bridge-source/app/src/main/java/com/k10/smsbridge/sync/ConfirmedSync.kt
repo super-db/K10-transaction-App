@@ -41,15 +41,16 @@ object ConfirmedSync {
             .build()
         val workManager = WorkManager.getInstance(context)
         workManager.enqueueUniqueWork(SyncWorker.USER_SYNC_NAME, ExistingWorkPolicy.REPLACE, request)
-        var info: WorkInfo
-        while (true) {
+        var info: WorkInfo? = null
+        while (info?.state?.isFinished != true) {
             info = withContext(Dispatchers.IO) { workManager.getWorkInfoById(request.id).get() }
-            if (info.state.isFinished) break
+            if (info?.state?.isFinished == true) break
             delay(150)
         }
-        val data = info.outputData
+        val completed = checkNotNull(info) { "Sync work disappeared before completion" }
+        val data = completed.outputData
         return ConfirmedSyncResult(
-            successful = info.state == WorkInfo.State.SUCCEEDED,
+            successful = completed.state == WorkInfo.State.SUCCEEDED,
             locallyAdded = data.getInt(SyncWorker.OUTPUT_SCANNED, 0),
             checked = data.getInt(SyncWorker.OUTPUT_ATTEMPTED, 0),
             synced = data.getInt(SyncWorker.OUTPUT_SYNCED, 0),
