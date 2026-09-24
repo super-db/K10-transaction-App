@@ -16,8 +16,9 @@ import kotlinx.coroutines.withContext
 object SmsInboxCatchUp {
     private const val PREFS = "automatic_sms_capture"
     private const val LAST_SCAN = "last_scan_epoch"
-    private const val FIRST_SCAN_LOOKBACK_MILLIS = 5 * 60 * 1000L
+    private const val FIRST_SCAN_LOOKBACK_MILLIS = 24 * 60 * 60 * 1000L
     private const val OVERLAP_MILLIS = 60 * 1000L
+    private const val ALERT_WINDOW_MILLIS = 10 * 60 * 1000L
 
     suspend fun importMissed(context: Context, rules: RuleConfig, dao: TransactionDao): Int = withContext(Dispatchers.IO) {
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.READ_SMS) != PackageManager.PERMISSION_GRANTED) {
@@ -51,12 +52,14 @@ object SmsInboxCatchUp {
                     val entity = parsed.toEntity()
                     if (dao.insert(entity) != -1L) {
                         added++
-                        val preferences = Graph.mobileSession.load()?.notificationPreferences
-                        if (!parsed.payerExcluded && preferences?.voiceAnnouncements != false) {
-                            Graph.announcer.announceReceived(entity.amountMinor)
-                        }
-                        if (!parsed.payerExcluded && preferences?.transactionAlerts != false) {
-                            Graph.notifier.notifyReceived(entity.amountMinor, entity.payerName, entity.uniqueLocalId)
+                        if (entity.smsReceivedTimestamp >= now - ALERT_WINDOW_MILLIS) {
+                            val preferences = Graph.mobileSession.load()?.notificationPreferences
+                            if (!parsed.payerExcluded && preferences?.voiceAnnouncements != false) {
+                                Graph.announcer.announceReceived(entity.amountMinor)
+                            }
+                            if (!parsed.payerExcluded && preferences?.transactionAlerts != false) {
+                                Graph.notifier.notifyReceived(entity.amountMinor, entity.payerName, entity.uniqueLocalId)
+                            }
                         }
                     }
                 }
@@ -65,6 +68,7 @@ object SmsInboxCatchUp {
         } catch (_: SecurityException) {
             return@withContext 0
         }
+        if (added > 0) Graph.transactionEvents.tryEmit(Unit)
         added
     }
 }

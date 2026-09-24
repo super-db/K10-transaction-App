@@ -9,6 +9,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -16,6 +18,9 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Notifications
+import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -28,9 +33,13 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.k10.smsbridge.ThemeMode
 import com.k10.smsbridge.mobile.ManagedAccount
 import com.k10.smsbridge.mobile.NotificationPreferences
+import com.k10.smsbridge.mobile.MobileTransaction
 import java.text.NumberFormat
 import java.time.Instant
 import java.time.ZoneId
@@ -46,6 +55,8 @@ fun K10PayApp(darkMode:Boolean,themeMode:ThemeMode,onThemeModeChange:(ThemeMode)
     val session=vm.session
     if(session==null){AuthScreen(vm,darkMode,onToggleTheme);return}
     if(session.passwordChangeRequired){ForcedPasswordScreen(vm,darkMode,onToggleTheme);return}
+    val lifecycleOwner=LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner){val observer=LifecycleEventObserver{_,event->if(event==Lifecycle.Event.ON_RESUME)vm.refresh()};lifecycleOwner.lifecycle.addObserver(observer);onDispose{lifecycleOwner.lifecycle.removeObserver(observer)}}
     var screen by remember{mutableStateOf("home")}
     BackHandler(enabled=screen!="home"){screen="home"}
     AnimatedContent(targetState=screen,transitionSpec={fadeIn(tween(220))+slideInHorizontally{it/8} togetherWith fadeOut(tween(160))},label="screen"){destination->
@@ -95,36 +106,52 @@ private fun AuthScreen(vm:MobileViewModel,dark:Boolean,toggle:()->Unit){
 @Composable
 private fun MobileHome(vm:MobileViewModel,openApprovals:()->Unit,openSettings:()->Unit){
     val session=vm.session?:return
-    Scaffold(topBar={Surface(shadowElevation=2.dp){Row(Modifier.fillMaxWidth().statusBarsPadding().padding(horizontal=16.dp,vertical=12.dp),verticalAlignment=Alignment.CenterVertically){Column(Modifier.weight(1f)){K10Wordmark(MaterialTheme.typography.headlineMedium);Text("${session.displayName} · ${roleName(session.role)}",color=MaterialTheme.colorScheme.onSurfaceVariant)};if(session.developer)BadgedBox(badge={if(vm.pendingApprovals>0)Badge{Text(vm.pendingApprovals.coerceAtMost(99).toString())}}){IconButton(openApprovals){Text("●",color=MaterialTheme.colorScheme.primary,style=MaterialTheme.typography.titleLarge)}};IconButton(openSettings){Text("⚙",style=MaterialTheme.typography.titleLarge)}}}}){padding->
-        PullToRefreshBox(isRefreshing=vm.busy,onRefresh={vm.load(vm.range)},modifier=Modifier.fillMaxSize().padding(padding)){
+    var selected by remember{mutableStateOf<MobileTransaction?>(null)}
+    Scaffold(topBar={Surface(shadowElevation=2.dp){Row(Modifier.fillMaxWidth().statusBarsPadding().padding(horizontal=16.dp,vertical=12.dp),verticalAlignment=Alignment.CenterVertically){Column(Modifier.weight(1f)){K10Wordmark(MaterialTheme.typography.headlineMedium);Text("${session.displayName} · ${roleName(session.role)}",color=MaterialTheme.colorScheme.onSurfaceVariant)};if(session.developer)BadgedBox(badge={if(vm.pendingApprovals>0)Badge{Text(vm.pendingApprovals.coerceAtMost(99).toString())}}){FilledTonalIconButton(openApprovals){Icon(Icons.Rounded.Notifications,"Approval notifications",tint=MaterialTheme.colorScheme.primary)}};IconButton(openSettings){Icon(Icons.Rounded.Settings,"Settings")}}}}){padding->
+        PullToRefreshBox(isRefreshing=vm.loadingTransactions,onRefresh=vm::refresh,modifier=Modifier.fillMaxSize().padding(padding)){
             LazyColumn(Modifier.fillMaxSize().padding(horizontal=16.dp),contentPadding=PaddingValues(vertical=16.dp),verticalArrangement=Arrangement.spacedBy(12.dp)){
-                item{AnimatedSummaryCard(vm.transactions.mapNotNull{it.amount}.sum(),vm.transactions.size,vm.range)}
+                item{AnimatedSummaryCard(vm.todayAmount,vm.todayCount)}
                 item{Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(6.dp)){Range("Today",true,vm.range=="today",Modifier.weight(1f)){vm.load("today")};Range("15d",session.has("finance.slice.history15"),vm.range=="15d",Modifier.weight(1f)){vm.load("15d")};Range("30d",session.has("finance.slice.history30"),vm.range=="30d",Modifier.weight(1f)){vm.load("30d")};Range("All",session.has("finance.slice.historyLifetime"),vm.range=="all",Modifier.weight(1f)){vm.load("all")}}}
                 item{Text("Recent transactions",style=MaterialTheme.typography.titleLarge,fontWeight=FontWeight.Bold)}
                 if(vm.message.isNotBlank())item{Message(vm)}
-                if(!vm.busy&&vm.transactions.isEmpty())item{Text("No transactions in this range.",color=MaterialTheme.colorScheme.onSurfaceVariant,modifier=Modifier.padding(vertical=24.dp))}
+                if(!vm.loadingTransactions&&vm.transactions.isEmpty())item{Text("No transactions in this range.",color=MaterialTheme.colorScheme.onSurfaceVariant,modifier=Modifier.padding(vertical=24.dp))}
                 items(vm.transactions,key={it.id}){tx->
                     var visible by remember(tx.id){mutableStateOf(false)}
                     LaunchedEffect(tx.id){visible=true}
                     AnimatedVisibility(visible=visible,enter=fadeIn(tween(350))+slideInVertically(tween(350)){it/4}){
-                        Card(Modifier.fillMaxWidth()){Row(Modifier.padding(16.dp),verticalAlignment=Alignment.CenterVertically){Surface(shape=MaterialTheme.shapes.extraLarge,color=MaterialTheme.colorScheme.secondaryContainer){Text(tx.payerName.take(2).uppercase(),Modifier.padding(12.dp),fontWeight=FontWeight.Bold)};Column(Modifier.weight(1f).padding(horizontal=12.dp)){Text(tx.payerName,fontWeight=FontWeight.Bold,style=MaterialTheme.typography.titleMedium);Text("${formatTime(tx.occurredAt)} · ${tx.paymentMethod}",color=MaterialTheme.colorScheme.onSurfaceVariant,style=MaterialTheme.typography.bodySmall)};Text(tx.amount?.let(::money)?:money(0.0),color=MaterialTheme.colorScheme.primary,fontWeight=FontWeight.Bold)}}
+                        TransactionCard(tx){selected=tx;if(session.developer&&vm.students.isEmpty())vm.loadStudents(false)}
                     }
                 }
             }
         }
     }
+    selected?.let{tx->TransactionDetailDialog(tx,session.developer,vm,{selected=null}){studentId->vm.tagTransaction(tx.id,studentId);selected=null}}
 }
 
-@Composable private fun AnimatedSummaryCard(total:Double,count:Int,range:String){
+@Composable private fun AnimatedSummaryCard(total:Double,count:Int){
     val transition=rememberInfiniteTransition(label="account-card")
     val start by transition.animateColor(Color(0xFF214977),Color(0xFF5330A8),infiniteRepeatable(tween(9000,easing=LinearEasing),RepeatMode.Reverse),label="card-start")
     val end by transition.animateColor(Color(0xFF48239C),Color(0xFF164F78),infiniteRepeatable(tween(11000,easing=LinearEasing),RepeatMode.Reverse),label="card-end")
     Card(Modifier.fillMaxWidth(),shape=RoundedCornerShape(22.dp)){
         Row(Modifier.fillMaxWidth().background(Brush.linearGradient(listOf(start,end))).padding(20.dp),verticalAlignment=Alignment.CenterVertically){
-            Column(Modifier.weight(1f)){Text("K10 SLICE ACCOUNT",color=Color(0xFFD9E5FF),fontWeight=FontWeight.SemiBold,style=MaterialTheme.typography.labelLarge);Crossfade(targetState=money(total),label="total"){Text(it,color=Color.White,style=MaterialTheme.typography.headlineLarge,fontWeight=FontWeight.Bold)};Text("Received · ${rangeName(range)} · $count transaction(s)",color=Color(0xFFE3E8F5))}
+            Column(Modifier.weight(1f)){Text("K10 SLICE ACCOUNT",color=Color(0xFFD9E5FF),fontWeight=FontWeight.SemiBold,style=MaterialTheme.typography.labelLarge);Crossfade(targetState=money(total),label="total"){Text(it,color=Color.White,style=MaterialTheme.typography.headlineLarge,fontWeight=FontWeight.Bold)};Text("Received today · $count transaction(s)",color=Color(0xFFE3E8F5))}
             Row(Modifier.height(54.dp),horizontalArrangement=Arrangement.spacedBy(5.dp),verticalAlignment=Alignment.Bottom){listOf(18,30,45).forEachIndexed{index,height->val pulse by transition.animateFloat(0.72f,1f,infiniteRepeatable(tween(1800+index*500,easing=EaseInOut),RepeatMode.Reverse),label="bar-$index");Box(Modifier.width(6.dp).height((height*pulse).dp).clip(RoundedCornerShape(5.dp)).background(Color(0xFF9FA8FF)))}}
         }
     }
+}
+
+@Composable private fun TransactionCard(tx:MobileTransaction,onClick:()->Unit){Card(onClick=onClick,modifier=Modifier.fillMaxWidth()){Row(Modifier.padding(16.dp),verticalAlignment=Alignment.CenterVertically){Surface(shape=MaterialTheme.shapes.extraLarge,color=MaterialTheme.colorScheme.secondaryContainer){Text(tx.payerName.take(2).uppercase(),Modifier.padding(12.dp),fontWeight=FontWeight.Bold)};Column(Modifier.weight(1f).padding(horizontal=12.dp)){Text(tx.payerName,fontWeight=FontWeight.Bold,style=MaterialTheme.typography.titleMedium);Text("${formatTime(tx.occurredAt)} · ${tx.paymentMethod}",color=MaterialTheme.colorScheme.onSurfaceVariant,style=MaterialTheme.typography.bodySmall);tx.studentName?.let{Text("Paid for $it",color=MaterialTheme.colorScheme.primary,fontWeight=FontWeight.SemiBold,style=MaterialTheme.typography.bodySmall)}};Text(tx.amount?.let(::money)?:money(0.0),color=MaterialTheme.colorScheme.primary,fontWeight=FontWeight.Bold)}}}
+
+@Composable private fun TransactionDetailDialog(tx:MobileTransaction,developer:Boolean,vm:MobileViewModel,close:()->Unit,tag:(String?)->Unit){
+    var picking by remember{mutableStateOf(false)}
+    AlertDialog(onDismissRequest=close,title={Text(tx.payerName)},text={Column(Modifier.verticalScroll(rememberScrollState()),verticalArrangement=Arrangement.spacedBy(8.dp)){Text(tx.amount?.let(::money)?:money(0.0),style=MaterialTheme.typography.headlineMedium,fontWeight=FontWeight.Bold,color=MaterialTheme.colorScheme.primary);SettingsValue("Received",formatTime(tx.occurredAt));SettingsValue("Method",tx.paymentMethod);tx.studentName?.let{SettingsValue("Student","Paid for $it")};HorizontalDivider();Text("Original eligible SMS",fontWeight=FontWeight.Bold);Text(tx.originalSmsMasked.ifBlank{"Original SMS is unavailable for this older record."},color=MaterialTheme.colorScheme.onSurfaceVariant)}},confirmButton={TextButton(close){Text("Close")}},dismissButton={if(developer)TextButton({picking=true}){Text(if(tx.studentId==null)"Tag student" else "Change tag")}})
+    if(picking)StudentPickerDialog(vm,tx.studentId,{picking=false}){tag(it);picking=false}
+}
+
+@Composable private fun StudentPickerDialog(vm:MobileViewModel,current:String?,close:()->Unit,select:(String?)->Unit){
+    var query by remember{mutableStateOf("")}
+    val filtered=remember(query,vm.students){vm.students.filter{query.isBlank()||it.name.contains(query,true)||it.batchName.contains(query,true)}}
+    AlertDialog(onDismissRequest=close,title={Text("Tag student")},text={Column{OutlinedTextField(query,{query=it},label={Text("Search student")},singleLine=true,modifier=Modifier.fillMaxWidth());LazyColumn(Modifier.heightIn(max=340.dp).padding(top=8.dp)){items(filtered,key={it.id}){student->TextButton({select(student.id)},Modifier.fillMaxWidth()){Column(Modifier.fillMaxWidth()){Text(student.name,color=MaterialTheme.colorScheme.onSurface,fontWeight=FontWeight.SemiBold);if(student.batchName.isNotBlank())Text(student.batchName,color=MaterialTheme.colorScheme.onSurfaceVariant,style=MaterialTheme.typography.bodySmall)}}}}}},confirmButton={TextButton(close){Text("Cancel")}},dismissButton={if(current!=null)TextButton({select(null)}){Text("Remove tag")}})
 }
 
 @Composable
@@ -239,17 +266,28 @@ private fun ManagePasswordsScreen(vm:MobileViewModel,back:()->Unit){
 
 @Composable private fun ExclusionsScreen(vm:MobileViewModel,back:()->Unit){
     var value by remember{mutableStateOf("")}
+    var selectedPayer by remember{mutableStateOf<String?>(null)}
+    var selectedTransaction by remember{mutableStateOf<MobileTransaction?>(null)}
     LaunchedEffect(Unit){vm.loadExclusions(false)}
-    Scaffold(topBar={AppBar("Excluded payer names",back)}){padding->
+    BackHandler(enabled=selectedPayer!=null){selectedPayer=null}
+    Scaffold(topBar={AppBar(selectedPayer?.let{"Excluded · $it"}?:"Excluded payer names",if(selectedPayer!=null)({selectedPayer=null})else back)}){padding->
         LazyColumn(Modifier.fillMaxSize().padding(padding),contentPadding=PaddingValues(16.dp),verticalArrangement=Arrangement.spacedBy(12.dp)){
-            item{Text("Only names found in qualified account-7972 transactions can be added. Their transactions stay stored for audit, but are hidden from totals, history, voice and alerts.",color=MaterialTheme.colorScheme.onSurfaceVariant)}
-            item{OutlinedTextField(value,{value=it.take(100)},label={Text("Qualified payer name")},singleLine=true,modifier=Modifier.fillMaxWidth());Button({vm.addExcludedPayer(value);value=""},enabled=!vm.busy&&value.isNotBlank(),modifier=Modifier.fillMaxWidth().padding(top=8.dp)){Text(if(vm.busy)"Saving…" else "Add to excluded list")}}
-            if(vm.message.isNotBlank())item{Message(vm)}
-            item{Text("Excluded names",style=MaterialTheme.typography.titleLarge,fontWeight=FontWeight.Bold)}
-            if(vm.excludedPayers.isEmpty()&&!vm.busy)item{Text("No qualified payer names are excluded.",color=MaterialTheme.colorScheme.onSurfaceVariant)}
-            items(vm.excludedPayers,key={it.name.lowercase()}){payer->Card(Modifier.fillMaxWidth()){Row(Modifier.fillMaxWidth().padding(16.dp),verticalAlignment=Alignment.CenterVertically){Column(Modifier.weight(1f)){Text(payer.name,fontWeight=FontWeight.Bold,style=MaterialTheme.typography.titleMedium);Text(if(payer.transactionCount==1)"1 matching transaction" else "${payer.transactionCount} matching transactions",color=MaterialTheme.colorScheme.onSurfaceVariant);if(payer.lastSeenAt.isNotBlank())Text("Latest: ${formatTime(payer.lastSeenAt)}",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)};TextButton({vm.removeExcludedPayer(payer.name)},enabled=!vm.busy){Text("Remove")}}}}
+            if(selectedPayer==null){
+                item{Text("Only names found in qualified account-7972 transactions can be added. Their transactions stay stored for audit, but are hidden from totals, history, voice and alerts.",color=MaterialTheme.colorScheme.onSurfaceVariant)}
+                item{OutlinedTextField(value,{value=it.take(100)},label={Text("Qualified payer name")},singleLine=true,modifier=Modifier.fillMaxWidth());Button({vm.addExcludedPayer(value);value=""},enabled=!vm.busy&&value.isNotBlank(),modifier=Modifier.fillMaxWidth().padding(top=8.dp)){Text(if(vm.busy)"Saving…" else "Add to excluded list")}}
+                if(vm.message.isNotBlank())item{Message(vm)}
+                item{Text("Excluded names",style=MaterialTheme.typography.titleLarge,fontWeight=FontWeight.Bold)}
+                if(vm.excludedPayers.isEmpty()&&!vm.busy)item{Text("No qualified payer names are excluded.",color=MaterialTheme.colorScheme.onSurfaceVariant)}
+                items(vm.excludedPayers,key={it.name.lowercase()}){payer->Card(onClick={selectedPayer=payer.name;vm.loadExcludedTransactions(payer.name)},modifier=Modifier.fillMaxWidth()){Row(Modifier.fillMaxWidth().padding(16.dp),verticalAlignment=Alignment.CenterVertically){Column(Modifier.weight(1f)){Text(payer.name,fontWeight=FontWeight.Bold,style=MaterialTheme.typography.titleMedium);Text(if(payer.transactionCount==1)"1 excluded transaction" else "${payer.transactionCount} excluded transactions",color=MaterialTheme.colorScheme.onSurfaceVariant);if(payer.lastSeenAt.isNotBlank())Text("Latest: ${formatTime(payer.lastSeenAt)}",style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)};Column(horizontalAlignment=Alignment.End){Text("›",style=MaterialTheme.typography.headlineSmall);TextButton({vm.removeExcludedPayer(payer.name)},enabled=!vm.busy){Text("Remove")}}}}}
+            }else{
+                item{Text("These transactions remain available only to the Developer and are excluded from all normal totals and alerts.",color=MaterialTheme.colorScheme.onSurfaceVariant)}
+                if(vm.loadingTransactions)item{LinearProgressIndicator(Modifier.fillMaxWidth())}
+                if(!vm.loadingTransactions&&vm.excludedTransactions.isEmpty())item{Text("No excluded transactions found.",color=MaterialTheme.colorScheme.onSurfaceVariant)}
+                items(vm.excludedTransactions,key={it.id}){tx->TransactionCard(tx){selectedTransaction=tx;if(vm.students.isEmpty())vm.loadStudents(false)}}
+            }
         }
     }
+    selectedTransaction?.let{tx->TransactionDetailDialog(tx,true,vm,{selectedTransaction=null}){studentId->vm.tagTransaction(tx.id,studentId);selectedTransaction=null;selectedPayer?.let(vm::loadExcludedTransactions)}}
 }
 
 @Composable private fun K10Wordmark(style:androidx.compose.ui.text.TextStyle){Row(verticalAlignment=Alignment.CenterVertically){Text("K10",style=style,fontWeight=FontWeight.Bold,color=MaterialTheme.colorScheme.onBackground);Text(" Pay",style=style,fontWeight=FontWeight.Bold,color=MaterialTheme.colorScheme.primary)}}

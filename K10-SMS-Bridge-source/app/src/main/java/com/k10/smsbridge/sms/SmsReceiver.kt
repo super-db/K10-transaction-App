@@ -35,6 +35,7 @@ class SmsReceiver : BroadcastReceiver() {
                             if (!it.payerExcluded && preferences?.transactionAlerts != false) {
                                 Graph.notifier.notifyReceived(entity.amountMinor, entity.payerName, entity.uniqueLocalId)
                             }
+                            Graph.transactionEvents.tryEmit(Unit)
                             enqueueSync(context)
                         }
                     }

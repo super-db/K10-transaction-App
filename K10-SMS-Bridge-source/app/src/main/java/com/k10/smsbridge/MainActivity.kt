@@ -11,6 +11,12 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.graphics.Color
 import com.k10.smsbridge.ui.K10PayApp
+import androidx.work.Constraints
+import androidx.work.ExistingWorkPolicy
+import androidx.work.NetworkType
+import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.WorkManager
+import com.k10.smsbridge.sync.SyncWorker
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -25,6 +31,14 @@ class MainActivity : ComponentActivity() {
                 K10PayApp(darkMode=dark,themeMode=mode,onThemeModeChange={value->mode=value;prefs.edit().putString("theme_mode",value.name).apply()})
             }
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        val request = OneTimeWorkRequestBuilder<SyncWorker>()
+            .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
+            .build()
+        WorkManager.getInstance(this).enqueueUniqueWork(SyncWorker.IMMEDIATE_NAME, ExistingWorkPolicy.APPEND_OR_REPLACE, request)
     }
 }
 

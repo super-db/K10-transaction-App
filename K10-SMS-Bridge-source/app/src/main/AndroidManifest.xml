@@ -10,7 +10,9 @@
     <application
         android:name=".K10Application"
         android:allowBackup="false"
+        android:icon="@mipmap/ic_launcher"
         android:label="K10 Pay"
+        android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.K10SmsBridge"
         android:usesCleartextTraffic="false">

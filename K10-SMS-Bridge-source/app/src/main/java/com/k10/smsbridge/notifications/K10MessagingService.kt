@@ -57,13 +57,14 @@ class K10MessagingService : FirebaseMessagingService() {
             deliveries.all.filterValues { (it as? Long ?: now) < cutoff }.keys.forEach(editor::remove)
         }
         editor.apply()
+        Graph.transactionEvents.tryEmit(Unit)
     }
 
     private fun showNotification(data: Map<String, String>, approval: Boolean, deliveryId: String) {
         val intent = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         val body = data["body"] ?: if (approval) "A staff account is waiting for approval" else "A new payment was received"
         val notification = NotificationCompat.Builder(this, if (approval) APPROVAL_CHANNEL else CHANNEL)
-            .setSmallIcon(android.R.drawable.stat_notify_more)
+            .setSmallIcon(com.k10.smsbridge.R.drawable.ic_k10_notification)
             .setContentTitle(data["title"] ?: if (approval) "New staff approval" else "K10 Pay transaction")
             .setContentText(body).setStyle(NotificationCompat.BigTextStyle().bigText(body))
             .setPriority(NotificationCompat.PRIORITY_HIGH).setCategory(NotificationCompat.CATEGORY_STATUS)
