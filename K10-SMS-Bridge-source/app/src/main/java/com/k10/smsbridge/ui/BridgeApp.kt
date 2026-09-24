@@ -60,11 +60,15 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 
-private enum class Screen { HOME, LOG, SEARCH, SETTINGS }
+private enum class Screen { HOME, LOG, SEARCH, SETTINGS, DIAGNOSTICS }
 
 @Composable
 fun BridgeApp(initialScreen: String = "settings", exit: () -> Unit = {}, vm: BridgeViewModel = viewModel()) {
-    val start = if (initialScreen == "search") Screen.SEARCH else Screen.SETTINGS
+    val start = when (initialScreen) {
+        "search" -> Screen.SEARCH
+        "diagnostics" -> Screen.DIAGNOSTICS
+        else -> Screen.SETTINGS
+    }
     var screen by remember(initialScreen) { mutableStateOf(start) }
     val snackbarHostState = remember { SnackbarHostState() }
     BackHandler { if (screen == start) exit() else screen = start }
@@ -79,7 +83,7 @@ fun BridgeApp(initialScreen: String = "settings", exit: () -> Unit = {}, vm: Bri
                 .padding(padding)
                 .padding(horizontal = 16.dp, vertical = 12.dp)
                 .then(
-                    if (currentScreen == Screen.HOME || currentScreen == Screen.SETTINGS) {
+                    if (currentScreen == Screen.HOME || currentScreen == Screen.SETTINGS || currentScreen == Screen.DIAGNOSTICS) {
                         Modifier.verticalScroll(scrollState)
                     } else {
                         Modifier
@@ -91,8 +95,73 @@ fun BridgeApp(initialScreen: String = "settings", exit: () -> Unit = {}, vm: Bri
                     Screen.LOG -> TransactionLog(vm) { screen = start }
                     Screen.SEARCH -> SearchSmsScreen(vm) { if (start == Screen.SEARCH) exit() else screen = start }
                     Screen.SETTINGS -> SettingsScreen(vm) { if (start == Screen.SETTINGS) exit() else screen = start }
+                    Screen.DIAGNOSTICS -> SystemDiagnosticsScreen(vm) { exit() }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun SystemDiagnosticsScreen(vm: BridgeViewModel, back: () -> Unit) {
+    var showConfiguration by remember { mutableStateOf(false) }
+    val saved = remember { vm.settings() }
+    var url by remember { mutableStateOf(saved.backendUrl) }
+    var token by remember { mutableStateOf(vm.token()) }
+    var enabled by remember { mutableStateOf(saved.serviceEnabled) }
+    var account by remember { mutableStateOf(vm.rules().accountLast4) }
+    var senders by remember { mutableStateOf(vm.rules().allowedSenderIds.joinToString(", ")) }
+    LaunchedEffect(Unit) { vm.runFullDiagnostics() }
+
+    Header("System diagnostics", back)
+    Text("Checks the complete path from SMS capture to server storage and staff notifications. No test transaction is added to the account list.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+    Spacer(Modifier.height(12.dp))
+    Button(onClick = vm::runFullDiagnostics, enabled = !vm.isRunningDiagnostics, modifier = Modifier.fillMaxWidth()) {
+        Text(if (vm.isRunningDiagnostics) "Running full diagnostic…" else "Run full diagnostic")
+    }
+    Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        OutlinedButton(onClick = vm::retryPendingFromDiagnostics, modifier = Modifier.weight(1f)) { Text("Sync pending") }
+        OutlinedButton(onClick = vm::syncAll, enabled = !vm.isSyncingAll, modifier = Modifier.weight(1f)) { Text("Scan & sync") }
+    }
+    if (vm.diagnosticsRunAt > 0) {
+        Text("Last checked ${formatTimestamp(vm.diagnosticsRunAt)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 10.dp))
+    }
+    vm.diagnosticChecks.forEach { check -> DiagnosticCard(check) }
+    if (!vm.isRunningDiagnostics && vm.diagnosticChecks.isEmpty()) {
+        Text("Run the diagnostic to create a system report.", modifier = Modifier.padding(vertical = 20.dp))
+    }
+
+    HorizontalDivider(Modifier.padding(vertical = 14.dp))
+    OutlinedButton(onClick = { showConfiguration = !showConfiguration }, modifier = Modifier.fillMaxWidth()) {
+        Text(if (showConfiguration) "Hide connection configuration" else "Connection configuration")
+    }
+    if (showConfiguration) {
+        Text("Only the Developer can change these values. Secrets are never included in diagnostic reports.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(vertical = 8.dp))
+        Field(url, { url = it }, "Backend HTTPS URL")
+        OutlinedTextField(value = token, onValueChange = { token = it }, label = { Text("Device / API token") }, visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
+        Field(account, { account = it.filter(Char::isDigit).take(4) }, "Expected account last4")
+        Field(senders, { senders = it }, "Known Slice sender IDs")
+        Row(verticalAlignment = Alignment.CenterVertically) { Text("Collection service enabled", Modifier.weight(1f)); Switch(enabled, { enabled = it }) }
+        Button(onClick = { vm.saveSettings(url, token, enabled, account, senders); vm.runFullDiagnostics() }, enabled = !vm.isSaving, modifier = Modifier.fillMaxWidth()) { Text(if (vm.isSaving) "Saving…" else "Save & retest") }
+    }
+}
+
+@Composable
+private fun DiagnosticCard(check: SystemDiagnostic) {
+    val color = when (check.status.lowercase()) {
+        "working", "active", "ok", "healthy" -> androidx.compose.ui.graphics.Color(0xFF3DA66A)
+        "pending", "delayed", "warning" -> MaterialTheme.colorScheme.tertiary
+        "failed", "error" -> MaterialTheme.colorScheme.error
+        else -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    Card(Modifier.fillMaxWidth().padding(top = 8.dp)) {
+        Column(Modifier.padding(14.dp)) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text(check.title, Modifier.weight(1f), fontWeight = FontWeight.Bold)
+                Text(check.status.replace('_', ' ').uppercase(), color = color, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+            }
+            Text(check.detail, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 4.dp))
+            check.suggestion?.let { Text("Suggested: $it", color = color, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 6.dp)) }
         }
     }
 }

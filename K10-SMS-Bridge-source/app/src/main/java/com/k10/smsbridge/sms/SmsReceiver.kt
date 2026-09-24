@@ -4,15 +4,11 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.provider.Telephony
-import androidx.work.Constraints
-import androidx.work.ExistingWorkPolicy
-import androidx.work.NetworkType
-import androidx.work.OneTimeWorkRequestBuilder
-import androidx.work.WorkManager
 import com.k10.smsbridge.Graph
 import com.k10.smsbridge.data.toEntity
-import com.k10.smsbridge.sync.SyncWorker
+import com.k10.smsbridge.sync.TransactionSyncCoordinator
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 class SmsReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
@@ -36,7 +32,14 @@ class SmsReceiver : BroadcastReceiver() {
                                 Graph.notifier.notifyReceived(entity.amountMinor, entity.payerName, entity.uniqueLocalId)
                             }
                             Graph.transactionEvents.tryEmit(Unit)
-                            enqueueSync(context)
+                            // Give a newly received payment one short, immediate upload attempt so
+                            // staff devices can be notified without waiting for WorkManager.
+                            val outcome = withTimeoutOrNull(12_000) {
+                                TransactionSyncCoordinator.uploadOne(entity, fastAttempt = true)
+                            }
+                            if (outcome?.confirmedOnServer != true) {
+                                TransactionSyncCoordinator.enqueueRecovery(context, expedited = true)
+                            }
                         }
                     }
                 }
@@ -46,10 +49,4 @@ class SmsReceiver : BroadcastReceiver() {
         }
     }
 
-    private fun enqueueSync(context: Context) {
-        val request = OneTimeWorkRequestBuilder<SyncWorker>()
-            .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
-            .build()
-        WorkManager.getInstance(context).enqueueUniqueWork(SyncWorker.IMMEDIATE_NAME, ExistingWorkPolicy.APPEND_OR_REPLACE, request)
-    }
 }

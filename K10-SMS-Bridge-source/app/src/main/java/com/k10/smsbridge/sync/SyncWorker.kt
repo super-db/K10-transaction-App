@@ -42,38 +42,24 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
         var authenticationFailures = 0
         var unexpectedFailures = 0
         var rejected = 0
-        var cloudStateChanged = false
         var synced = 0
         var duplicates = 0
         var excluded = 0
         val pending = dao.pending()
         pending.forEach { item ->
-            runCatching { BackendClient.upload(settings.backendUrl, token, item) }
-                .onSuccess { response ->
-                    val localStatus = when (response.status.lowercase()) {
-                        "success" -> "SYNCED"
-                        "duplicate" -> "DUPLICATE"
-                        "excluded" -> "EXCLUDED"
-                        "rejected", "validation_error" -> "REJECTED"
-                        "authentication_error" -> "FAILED"
-                        else -> "FAILED"
-                    }
-                    dao.updateStatus(item.uniqueLocalId, localStatus, response.message)
-                    when (localStatus) {
-                        "SYNCED" -> synced++
-                        "DUPLICATE" -> duplicates++
-                        "EXCLUDED" -> excluded++
-                        "REJECTED" -> rejected++
-                        "FAILED" -> if (response.status.equals("authentication_error", true)) authenticationFailures++ else unexpectedFailures++
-                    }
-                    if (localStatus != "FAILED") cloudStateChanged = true
+            val outcome = TransactionSyncCoordinator.uploadOne(item)
+            when (outcome.status) {
+                "SYNCED" -> synced++
+                "DUPLICATE" -> duplicates++
+                "EXCLUDED" -> excluded++
+                "REJECTED" -> rejected++
+                "FAILED" -> when {
+                    outcome.httpCode == 401 || outcome.httpCode == 403 -> authenticationFailures++
+                    outcome.httpCode == null || outcome.httpCode >= 500 -> temporaryFailures++
+                    else -> unexpectedFailures++
                 }
-                .onFailure {
-                    dao.updateStatus(item.uniqueLocalId, "FAILED", "Temporary connection error")
-                    temporaryFailures++
-                }
+            }
         }
-        if (cloudStateChanged) Graph.transactionEvents.tryEmit(Unit)
         val output = Data.Builder()
             .putInt(OUTPUT_SCANNED, scanned)
             .putInt(OUTPUT_ATTEMPTED, pending.size)
@@ -108,6 +94,7 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
     companion object {
         const val PERIODIC_NAME = "k10-periodic-rules-and-sync"
         const val IMMEDIATE_NAME = "k10-immediate-transaction-sync"
+        const val SHORT_RECOVERY_NAME = "k10-short-transaction-recovery"
         const val STARTUP_NAME = "k10-startup-catch-up-and-sync"
         const val USER_SYNC_NAME = "k10-user-confirmed-sync"
         const val KEY_INTERACTIVE = "interactive"

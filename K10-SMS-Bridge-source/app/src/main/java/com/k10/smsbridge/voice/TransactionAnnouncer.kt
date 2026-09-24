@@ -25,6 +25,8 @@ class TransactionAnnouncer(context: Context) : TextToSpeech.OnInitListener {
         if (ready) speak(message) else synchronized(pending) { pending.addLast(message) }
     }
 
+    fun isReady(): Boolean = ready
+
     private fun speak(message: String) {
         tts.speak(message, TextToSpeech.QUEUE_ADD, null, "k10-${System.currentTimeMillis()}")
     }

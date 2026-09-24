@@ -1,27 +1,41 @@
 package com.k10.smsbridge.ui
 
+import android.Manifest
 import android.app.Application
+import android.content.Context
+import android.content.pm.PackageManager
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
+import android.os.Build
+import android.os.PowerManager
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
-import androidx.work.Constraints
-import androidx.work.ExistingWorkPolicy
-import androidx.work.NetworkType
-import androidx.work.OneTimeWorkRequestBuilder
-import androidx.work.WorkManager
 import com.k10.smsbridge.Graph
 import com.k10.smsbridge.data.TransactionEntity
 import com.k10.smsbridge.rules.BridgeSettings
+import com.k10.smsbridge.mobile.DeviceRegistrationStatus
 import com.k10.smsbridge.sms.SmsSearchFilters
 import com.k10.smsbridge.sms.SmsSearchItem
 import com.k10.smsbridge.sms.SmsSearchRepository
 import com.k10.smsbridge.sync.BackendClient
 import com.k10.smsbridge.sync.ConfirmedSync
-import com.k10.smsbridge.sync.SyncWorker
+import com.k10.smsbridge.sync.TransactionSyncCoordinator
+import com.google.firebase.messaging.FirebaseMessaging
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlin.coroutines.resume
+
+data class SystemDiagnostic(
+    val key: String,
+    val title: String,
+    val status: String,
+    val detail: String,
+    val suggestion: String? = null
+)
 
 class BridgeViewModel(app: Application) : AndroidViewModel(app) {
     val transactions: Flow<List<TransactionEntity>> = Graph.database.transactions().observeAll().map { rows ->
@@ -53,6 +67,12 @@ class BridgeViewModel(app: Application) : AndroidViewModel(app) {
     var isSyncingAll: Boolean by androidx.compose.runtime.mutableStateOf(false)
         private set
     var hasSearched: Boolean by androidx.compose.runtime.mutableStateOf(false)
+        private set
+    var isRunningDiagnostics: Boolean by androidx.compose.runtime.mutableStateOf(false)
+        private set
+    var diagnosticChecks: List<SystemDiagnostic> by androidx.compose.runtime.mutableStateOf(emptyList())
+        private set
+    var diagnosticsRunAt: Long by androidx.compose.runtime.mutableLongStateOf(0L)
         private set
 
     private val searchRepository = SmsSearchRepository(app, Graph.database.transactions())
@@ -121,14 +141,7 @@ class BridgeViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun enqueueSyncWork() {
-        val request = OneTimeWorkRequestBuilder<SyncWorker>()
-            .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
-            .build()
-        WorkManager.getInstance(getApplication()).enqueueUniqueWork(
-            SyncWorker.IMMEDIATE_NAME,
-            ExistingWorkPolicy.APPEND_OR_REPLACE,
-            request
-        )
+        TransactionSyncCoordinator.enqueueRecovery(getApplication(), expedited = true)
     }
 
     fun search(filters: SmsSearchFilters) {
@@ -194,6 +207,97 @@ class BridgeViewModel(app: Application) : AndroidViewModel(app) {
                 .onFailure { notifyUser(it.message ?: "Sync all failed") }
             isSyncingAll = false
         }
+    }
+
+    fun runFullDiagnostics() {
+        if (isRunningDiagnostics) return
+        viewModelScope.launch {
+            isRunningDiagnostics = true
+            diagnosticChecks = emptyList()
+            val app = getApplication<Application>()
+            val checks = mutableListOf<SystemDiagnostic>()
+            val smsGranted = androidx.core.content.ContextCompat.checkSelfPermission(app, Manifest.permission.RECEIVE_SMS) == PackageManager.PERMISSION_GRANTED &&
+                androidx.core.content.ContextCompat.checkSelfPermission(app, Manifest.permission.READ_SMS) == PackageManager.PERMISSION_GRANTED
+            checks += SystemDiagnostic("sms_permissions", "SMS access", if (smsGranted) "working" else "failed", if (smsGranted) "Receive and inbox recovery permissions are granted" else "SMS permission is missing", if (smsGranted) null else "Grant SMS permissions from Android settings")
+
+            val notificationGranted = (Build.VERSION.SDK_INT < 33 || androidx.core.content.ContextCompat.checkSelfPermission(app, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) &&
+                androidx.core.app.NotificationManagerCompat.from(app).areNotificationsEnabled()
+            checks += SystemDiagnostic("notification_permission", "Android notifications", if (notificationGranted) "working" else "failed", if (notificationGranted) "Notification permission is granted" else "Notification permission is blocked", if (notificationGranted) null else "Enable K10 Pay notifications in Android settings")
+            checks += SystemDiagnostic("voice_engine", "Voice announcements", if (Graph.announcer.isReady()) "working" else "pending", if (Graph.announcer.isReady()) "Android text-to-speech is ready" else "Text-to-speech is still unavailable", if (Graph.announcer.isReady()) null else "Check the phone's text-to-speech engine and language data")
+
+            val power = app.getSystemService(Context.POWER_SERVICE) as PowerManager
+            val unrestricted = power.isIgnoringBatteryOptimizations(app.packageName)
+            checks += SystemDiagnostic("battery", "Background reliability", if (unrestricted) "working" else "warning", if (unrestricted) "K10 Pay is not battery restricted" else "Android may delay retry work while the app is idle", if (unrestricted) null else "Set K10 Pay battery usage to Unrestricted on the Developer phone")
+
+            val connectivity = app.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+            val network = connectivity.activeNetwork
+            val capabilities = network?.let(connectivity::getNetworkCapabilities)
+            val online = capabilities?.let {
+                it.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+                    it.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+            } == true
+            checks += SystemDiagnostic("internet", "Internet", if (online) "working" else "failed", if (online) "Validated network is available" else "No validated internet connection", if (online) null else "Connect to mobile data or Wi-Fi and run the diagnostic again")
+
+            val rows = Graph.database.transactions().snapshot()
+            val pending = rows.count { it.syncStatus in setOf("PENDING", "UPLOADING") }
+            val failed = rows.count { it.syncStatus in setOf("FAILED", "REJECTED") }
+            val latest = rows.maxByOrNull { it.smsReceivedTimestamp }
+            checks += SystemDiagnostic("local_database", "Local transaction store", "working", "${rows.size} saved · latest ${latest?.payerName ?: "none"}")
+            checks += SystemDiagnostic("upload_queue", "Server upload queue", when { failed > 0 -> "failed"; pending > 0 -> "pending"; else -> "working" }, "$pending pending · $failed failed", when { failed > 0 -> "Tap Sync pending, then inspect the failed transaction response"; pending > 0 -> "Keep internet enabled or tap Sync pending"; else -> null })
+
+            val settings = settings()
+            val token = token()
+            if (settings.backendUrl.isBlank() || token.isBlank()) {
+                checks += SystemDiagnostic("backend", "Backend API", "failed", "Backend URL or API token is missing", "Save the connection configuration below")
+            } else {
+                val health = com.k10.smsbridge.sync.BackendClient.health(settings.backendUrl.trimEnd('/'), token)
+                checks += SystemDiagnostic("backend", "Backend API & authentication", if (health.healthy) "working" else "failed", "${health.message}${health.httpCode?.let { " · HTTP $it" }.orEmpty()}", if (health.healthy) null else "Verify the deployed API and SMS Bridge token")
+                if (health.healthy) {
+                    com.k10.smsbridge.sync.BackendClient.diagnostics(settings.backendUrl.trimEnd('/'), token).forEach { component ->
+                        checks += SystemDiagnostic(component.key, diagnosticTitle(component.key), component.status, component.detail, component.suggestion)
+                    }
+                }
+            }
+
+            val fcmToken = firebaseToken()
+            checks += SystemDiagnostic("firebase_device", "Firebase device token", if (fcmToken.isNullOrBlank()) "failed" else "working", if (fcmToken.isNullOrBlank()) "This phone could not obtain an FCM token" else "This phone has a current Firebase token", if (fcmToken.isNullOrBlank()) "Check Google services configuration and reconnect the phone" else null)
+            val registration = DeviceRegistrationStatus.read(app)
+            if (Graph.mobileSession.load() == null) {
+                checks += SystemDiagnostic("local_device_registration", "This phone's push registration", "failed", "No signed-in K10 Pay session is available", "Sign in again and rerun diagnostics")
+            } else {
+                checks += SystemDiagnostic(
+                    "local_device_registration",
+                    "This phone's push registration",
+                    if (registration.registered) "working" else "failed",
+                    registration.message,
+                    if (registration.registered) "Backend diagnostics will additionally verify every staff phone" else "Sign in again or check the mobile device-registration endpoint"
+                )
+            }
+
+            diagnosticChecks = checks.distinctBy { it.key }
+            diagnosticsRunAt = System.currentTimeMillis()
+            isRunningDiagnostics = false
+        }
+    }
+
+    fun retryPendingFromDiagnostics() {
+        TransactionSyncCoordinator.enqueueRecovery(getApplication(), expedited = true)
+        notifyUser("Pending transactions queued for immediate retry")
+    }
+
+    private suspend fun firebaseToken(): String? = suspendCancellableCoroutine { continuation ->
+        FirebaseMessaging.getInstance().token.addOnCompleteListener { task ->
+            if (continuation.isActive) continuation.resume(if (task.isSuccessful) task.result else null)
+        }
+    }
+
+    private fun diagnosticTitle(key: String) = when (key) {
+        "upload" -> "Transaction upload"
+        "d1" -> "Cloudflare D1"
+        "firebase" -> "Firebase delivery"
+        "device_registration" -> "Registered staff devices"
+        "notification_outbox" -> "Notification queue"
+        else -> key.replace('_', ' ').replaceFirstChar { it.uppercase() }
     }
 
     private suspend fun refreshSearchResults() {

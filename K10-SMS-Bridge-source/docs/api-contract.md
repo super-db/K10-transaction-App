@@ -49,16 +49,40 @@ Patterns are literal templates, not regular expressions. Only the documented pla
 }
 ```
 
-Suggested responses:
+Required responses:
 
-- `200` or `201`: `{ "status": "success" }`
-- `409`: `{ "status": "duplicate" }`
+- `200` or `201`: `{ "status": "success", "transaction_id": "server-id" }`
+- `409`: `{ "status": "duplicate", "transaction_id": "existing-server-id" }`
 - `400`/`422`: `{ "status": "rejected", "message": "..." }`
 - `401`/`403`: authentication failure
 - `5xx`: temporary failure; the app retries with WorkManager
 
 The backend should enforce a unique constraint on `duplicate_key` as a second layer of duplicate protection.
+It must also persist `unique_local_id` and return the durable server transaction ID. The same values should be included as `clientTransactionId` and `duplicateKey` by `GET /api/mobile/transactions` so the Developer app can merge local and cloud rows without duplicates.
+
+The response must be sent only after the D1 write is committed. Firebase fan-out may be queued after that commit, but it must use a durable notification-outbox record so a transient Firebase failure can be retried.
+The Firebase fan-out must exclude the registered `bridgeDevice` that uploaded the transaction; that phone already produced the local voice and Android alert. Staff devices receive the server push once, keyed by `transaction_id`.
 
 ## Health check
 
 `GET /api/health` returns any `2xx` response when the device credential and service are available.
+
+## Full system diagnostics
+
+`POST /api/k10-pay/diagnostics` uses the same SMS Bridge bearer token. It performs non-destructive checks, queues silent Firebase probes, and never returns credentials, raw SMS, balances, passwords, or Firebase tokens.
+
+```json
+{
+  "components": [
+    { "key": "upload", "status": "working", "detail": "Transaction ingestion route is active" },
+    { "key": "d1", "status": "working", "detail": "Read/write probe completed" },
+    { "key": "firebase", "status": "working", "detail": "Firebase credentials accepted" },
+    { "key": "device_registration", "status": "working", "detail": "3 active staff devices" },
+    { "key": "notification_outbox", "status": "pending", "detail": "1 delivery awaiting retry", "suggestion": "Retry the notification outbox" }
+  ]
+}
+```
+
+The D1 write probe should use a dedicated diagnostics table or an atomic write/delete batch so it cannot create a Slice transaction. Firebase should validate credentials and optionally send a silent nonce to registered devices; acknowledgements belong in the diagnostics/outbox table, not the transaction list.
+
+Staff apps acknowledge each Firebase data message with `POST /api/mobile/deliveries` containing `deviceId`, `deliveryId`, `type`, and `receivedAt`. The diagnostics endpoint uses these acknowledgements to distinguish “Firebase accepted the push” from “the staff phone actually received it.”
