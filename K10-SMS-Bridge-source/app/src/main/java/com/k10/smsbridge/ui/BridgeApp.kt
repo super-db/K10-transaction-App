@@ -358,6 +358,13 @@ private fun SearchResultCard(item: SmsSearchItem, import: () -> Unit, resync: ()
                         "REJECTED" -> "Server rejected this transaction"
                         else -> "Saved locally — server status unknown"
                     })
+                    if (item.localStatus in setOf("FAILED", "REJECTED") && !item.serverMessage.isNullOrBlank()) {
+                        Text(
+                            item.serverMessage,
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
                     if(item.localStatus != "EXCLUDED") {
                         OutlinedButton(onClick = resync) { Text(if(item.localStatus == "PENDING") "Sync now" else "Resync") }
                     }

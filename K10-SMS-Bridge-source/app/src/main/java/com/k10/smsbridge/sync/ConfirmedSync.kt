@@ -19,13 +19,15 @@ data class ConfirmedSyncResult(
     val synced: Int,
     val alreadyOnServer: Int,
     val excluded: Int,
+    val rejected: Int,
     val failed: Int,
     val error: String?
 ) {
     fun userMessage(): String = when {
-        successful -> "Local SMS and server transactions synced"
+        successful && rejected == 0 -> "Synced locally and with server"
+        successful -> "${synced + alreadyOnServer + excluded} confirmed on server · $rejected rejected. Check Scan existing SMS."
         !error.isNullOrBlank() -> error
-        else -> "$failed transaction(s) could not sync. Check connection and API settings."
+        else -> "$failed transaction(s) could not sync. Open SMS Bridge settings for details."
     }
 }
 
@@ -56,6 +58,7 @@ object ConfirmedSync {
             synced = data.getInt(SyncWorker.OUTPUT_SYNCED, 0),
             alreadyOnServer = data.getInt(SyncWorker.OUTPUT_DUPLICATES, 0),
             excluded = data.getInt(SyncWorker.OUTPUT_EXCLUDED, 0),
+            rejected = data.getInt(SyncWorker.OUTPUT_REJECTED, 0),
             failed = data.getInt(SyncWorker.OUTPUT_FAILED, 0),
             error = data.getString(SyncWorker.OUTPUT_ERROR)
         )
