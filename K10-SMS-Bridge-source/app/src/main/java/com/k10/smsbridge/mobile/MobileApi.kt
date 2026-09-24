@@ -8,7 +8,21 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
 
-data class MobileTransaction(val id:String,val payerName:String,val amount:Double?,val occurredAt:String,val paymentMethod:String,val status:String,val studentId:String?=null,val studentName:String?=null,val originalSmsMasked:String="")
+data class MobileTransaction(
+    val id:String,
+    val payerName:String,
+    val amount:Double?,
+    val occurredAt:String,
+    val paymentMethod:String,
+    val status:String,
+    val studentId:String?=null,
+    val studentName:String?=null,
+    val originalSmsMasked:String="",
+    val clientTransactionId:String?=null,
+    val duplicateKey:String?=null,
+    val localOnly:Boolean=false,
+    val serverMessage:String?=null
+)
 data class TransactionPage(val transactions:List<MobileTransaction>,val todayAmount:Double,val todayCount:Int)
 data class StudentOption(val id:String,val name:String,val batchName:String)
 data class AccountRequest(val id:String,val name:String,val phone:String,val email:String,val requestedAt:String)
@@ -80,6 +94,11 @@ object MobileApi{
     suspend fun excludedTransactions(session:MobileSession,payer:String):List<MobileTransaction> = withContext(Dispatchers.IO){val encoded=URLEncoder.encode(payer,"UTF-8");val(code,body)=request("/api/mobile/exclusions?payer=$encoded","GET",session.token,null);val json=json(body);if(code !in 200..299)error(json.optString("error","Could not load excluded transactions"));val array=json.optJSONArray("transactions")?:JSONArray();(0 until array.length()).map{transaction(array.getJSONObject(it))}}
     suspend fun register(session:MobileSession,fcmToken:String,deviceId:String,bridge:Boolean)=withContext(Dispatchers.IO){val payload=JSONObject().put("fcmToken",fcmToken).put("deviceId",deviceId).put("appVersion",com.k10.smsbridge.BuildConfig.VERSION_NAME).put("bridgeDevice",bridge);val(code,body)=request("/api/mobile/devices","POST",session.token,payload.toString());if(code !in 200..299)error(json(body).optString("error","Device registration failed"))}
     suspend fun unregister(session:MobileSession,deviceId:String)=withContext(Dispatchers.IO){request("/api/mobile/devices","DELETE",session.token,JSONObject().put("deviceId",deviceId).toString())}
+    suspend fun acknowledgeDelivery(session:MobileSession,deviceId:String,deliveryId:String,type:String)=withContext(Dispatchers.IO){
+        val payload=JSONObject().put("deviceId",deviceId).put("deliveryId",deliveryId).put("type",type).put("receivedAt",System.currentTimeMillis())
+        val(code,body)=request("/api/mobile/deliveries","POST",session.token,payload.toString())
+        if(code !in 200..299)error(json(body).optString("error","Notification acknowledgement failed"))
+    }
     suspend fun exclusions(session:MobileSession):List<ExcludedPayer> = withContext(Dispatchers.IO){val(code,body)=request("/api/mobile/exclusions","GET",session.token,null);val json=json(body);if(code !in 200..299)error(json.optString("error","Could not load exclusions"));excludedPayers(json)}
     suspend fun saveExclusions(session:MobileSession,names:List<String>):List<ExcludedPayer> = withContext(Dispatchers.IO){val(code,body)=request("/api/mobile/exclusions","PUT",session.token,JSONObject().put("names",JSONArray(names)).toString());val json=json(body);if(code !in 200..299)error(json.optString("error","Could not save exclusions"));excludedPayers(json)}
     suspend fun preferences(session:MobileSession):NotificationPreferences = withContext(Dispatchers.IO){
@@ -103,7 +122,22 @@ object MobileApi{
         return MobileSession(json.getString("token"),user.getString("id"),user.getString("loginId"),user.getString("displayName"),user.getString("role"),user.optString("historyTier","today"),(0 until permissions.length()).map{permissions.getString(it)}.toSet(),user.optBoolean("passwordChangeRequired"),preferences(user.optJSONObject("notificationPreferences")?:JSONObject()))
     }
     private fun preferences(json:JSONObject)=NotificationPreferences(json.optBoolean("transactionAlerts",true),json.optBoolean("voiceAnnouncements",true),json.optBoolean("approvalAlerts",false))
-    private fun transaction(value:JSONObject)=MobileTransaction(value.getString("id"),value.optString("payerName","Unknown payer"),if(value.isNull("amount"))null else value.optDouble("amount"),value.optString("occurredAt"),value.optString("paymentMethod","UNKNOWN"),value.optString("status","new"),value.optString("studentId").takeIf{it.isNotBlank()&&it!="null"},value.optString("studentName").takeIf{it.isNotBlank()&&it!="null"},value.optString("originalSmsMasked"))
+    private fun transaction(value:JSONObject)=MobileTransaction(
+        id=value.getString("id"),
+        payerName=value.optString("payerName","Unknown payer"),
+        amount=if(value.isNull("amount"))null else value.optDouble("amount"),
+        occurredAt=value.optString("occurredAt"),
+        paymentMethod=value.optString("paymentMethod","UNKNOWN"),
+        // A row returned by this endpoint is already persisted in D1. The
+        // dashboard's business status (new/matched/ignored) is not a sync state.
+        status=value.optString("syncStatus").takeIf{it.isNotBlank()}?:"SYNCED",
+        studentId=value.optString("studentId").takeIf{it.isNotBlank()&&it!="null"},
+        studentName=value.optString("studentName").takeIf{it.isNotBlank()&&it!="null"},
+        originalSmsMasked=value.optString("originalSmsMasked"),
+        clientTransactionId=value.optString("clientTransactionId",value.optString("uniqueLocalId")).takeIf{it.isNotBlank()&&it!="null"},
+        duplicateKey=value.optString("duplicateKey").takeIf{it.isNotBlank()&&it!="null"},
+        serverMessage=value.optString("serverMessage").takeIf{it.isNotBlank()&&it!="null"}
+    )
     private fun excludedPayers(json:JSONObject):List<ExcludedPayer>{val items=json.optJSONArray("items");if(items!=null)return(0 until items.length()).map{items.getJSONObject(it)}.map{ExcludedPayer(it.optString("name"),it.optInt("transactionCount"),it.optString("lastSeenAt"))};val names=json.optJSONArray("names")?:JSONArray();return(0 until names.length()).map{ExcludedPayer(names.getString(it),0,"")}}
     private fun json(body:String)=runCatching{JSONObject(body)}.getOrElse{JSONObject().put("error","Server returned an invalid response. Please try again.")}
     private fun request(path:String,method:String,token:String?,body:String?):Pair<Int,String>{val connection=(URL(BASE_URL+path).openConnection() as HttpURLConnection).apply{requestMethod=method;connectTimeout=15_000;readTimeout=20_000;setRequestProperty("Accept","application/json");if(token!=null)setRequestProperty("Authorization","Bearer $token");if(body!=null){doOutput=true;setRequestProperty("Content-Type","application/json");outputStream.use{it.write(body.toByteArray())}}};return try{val code=connection.responseCode;val stream=if(code in 200..399)connection.inputStream else connection.errorStream;code to(stream?.bufferedReader()?.use{it.readText()}?:"")}finally{connection.disconnect()}}
