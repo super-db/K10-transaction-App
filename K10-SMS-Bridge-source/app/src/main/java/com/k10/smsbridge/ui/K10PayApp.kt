@@ -62,13 +62,13 @@ fun K10PayApp(darkMode:Boolean,themeMode:ThemeMode,onThemeModeChange:(ThemeMode)
     BackHandler(enabled=screen!="home"){screen="home"}
     AnimatedContent(targetState=screen,transitionSpec={fadeIn(tween(220))+slideInHorizontally{it/8} togetherWith fadeOut(tween(160))},label="screen"){destination->
         when(destination){
-            "bridge_settings"->BridgeApp(initialScreen="settings",exit={screen="settings"})
+            "diagnostics"->BridgeApp(initialScreen="diagnostics",exit={screen="settings"})
             "bridge_search"->BridgeApp(initialScreen="search",exit={screen="settings"})
             "exclusions"->ExclusionsScreen(vm){screen="settings"}
             "passwords"->ManagePasswordsScreen(vm){screen="settings"}
             "roles"->StaffAccessScreen(vm){screen="settings"}
             "approvals"->ApprovalScreen(vm){screen="home"}
-            "settings"->SettingsScreen(vm,themeMode,onThemeModeChange,{screen="home"},{screen="bridge_settings"},{screen="bridge_search"},{vm.loadExclusions();screen="exclusions"},{if(vm.session?.developer==true)vm.refreshApprovals(false);screen="passwords"},{vm.refreshApprovals(false);screen="roles"})
+            "settings"->SettingsScreen(vm,themeMode,onThemeModeChange,{screen="home"},{screen="diagnostics"},{screen="bridge_search"},{vm.loadExclusions();screen="exclusions"},{if(vm.session?.developer==true)vm.refreshApprovals(false);screen="passwords"},{vm.refreshApprovals(false);screen="roles"})
             else->{LaunchedEffect(Unit){vm.refresh()};MobileHome(vm,{screen="approvals"},{screen="settings"})}
         }
     }
@@ -141,11 +141,11 @@ private fun MobileHome(vm:MobileViewModel,openApprovals:()->Unit,openSettings:()
     }
 }
 
-@Composable private fun TransactionCard(tx:MobileTransaction,onClick:()->Unit){Card(onClick=onClick,modifier=Modifier.fillMaxWidth()){Row(Modifier.padding(16.dp),verticalAlignment=Alignment.CenterVertically){Surface(shape=MaterialTheme.shapes.extraLarge,color=MaterialTheme.colorScheme.secondaryContainer){Text(tx.payerName.take(2).uppercase(),Modifier.padding(12.dp),fontWeight=FontWeight.Bold)};Column(Modifier.weight(1f).padding(horizontal=12.dp)){Text(tx.payerName,fontWeight=FontWeight.Bold,style=MaterialTheme.typography.titleMedium);Text("${formatTime(tx.occurredAt)} · ${tx.paymentMethod}",color=MaterialTheme.colorScheme.onSurfaceVariant,style=MaterialTheme.typography.bodySmall);tx.studentName?.let{Text("Paid for $it",color=MaterialTheme.colorScheme.primary,fontWeight=FontWeight.SemiBold,style=MaterialTheme.typography.bodySmall)}};Text(tx.amount?.let(::money)?:money(0.0),color=MaterialTheme.colorScheme.primary,fontWeight=FontWeight.Bold)}}}
+@Composable private fun TransactionCard(tx:MobileTransaction,onClick:()->Unit){Card(onClick=onClick,modifier=Modifier.fillMaxWidth()){Row(Modifier.padding(16.dp),verticalAlignment=Alignment.CenterVertically){Surface(shape=MaterialTheme.shapes.extraLarge,color=MaterialTheme.colorScheme.secondaryContainer){Text(tx.payerName.take(2).uppercase(),Modifier.padding(12.dp),fontWeight=FontWeight.Bold)};Column(Modifier.weight(1f).padding(horizontal=12.dp)){Text(tx.payerName,fontWeight=FontWeight.Bold,style=MaterialTheme.typography.titleMedium);Text("${formatTime(tx.occurredAt)} · ${tx.paymentMethod}",color=MaterialTheme.colorScheme.onSurfaceVariant,style=MaterialTheme.typography.bodySmall);tx.studentName?.let{Text("Paid for $it",color=MaterialTheme.colorScheme.primary,fontWeight=FontWeight.SemiBold,style=MaterialTheme.typography.bodySmall)};Text(transactionStatusLabel(tx.status),color=transactionStatusColor(tx.status),fontWeight=FontWeight.SemiBold,style=MaterialTheme.typography.labelSmall,modifier=Modifier.padding(top=3.dp))};Text(tx.amount?.let(::money)?:money(0.0),color=MaterialTheme.colorScheme.primary,fontWeight=FontWeight.Bold)}}}
 
 @Composable private fun TransactionDetailDialog(tx:MobileTransaction,developer:Boolean,vm:MobileViewModel,close:()->Unit,tag:(String?)->Unit){
     var picking by remember{mutableStateOf(false)}
-    AlertDialog(onDismissRequest=close,title={Text(tx.payerName)},text={Column(Modifier.verticalScroll(rememberScrollState()),verticalArrangement=Arrangement.spacedBy(8.dp)){Text(tx.amount?.let(::money)?:money(0.0),style=MaterialTheme.typography.headlineMedium,fontWeight=FontWeight.Bold,color=MaterialTheme.colorScheme.primary);SettingsValue("Received",formatTime(tx.occurredAt));SettingsValue("Method",tx.paymentMethod);tx.studentName?.let{SettingsValue("Student","Paid for $it")};HorizontalDivider();Text("Original eligible SMS",fontWeight=FontWeight.Bold);Text(maskAvailableBalance(tx.originalSmsMasked).ifBlank{"Original SMS is unavailable for this older record."},color=MaterialTheme.colorScheme.onSurfaceVariant)}},confirmButton={TextButton(close){Text("Close")}},dismissButton={if(developer)TextButton({picking=true}){Text(if(tx.studentId==null)"Tag student" else "Change tag")}})
+    AlertDialog(onDismissRequest=close,title={Text(tx.payerName)},text={Column(Modifier.verticalScroll(rememberScrollState()),verticalArrangement=Arrangement.spacedBy(8.dp)){Text(tx.amount?.let(::money)?:money(0.0),style=MaterialTheme.typography.headlineMedium,fontWeight=FontWeight.Bold,color=MaterialTheme.colorScheme.primary);SettingsValue("Received",formatTime(tx.occurredAt));SettingsValue("Method",tx.paymentMethod);SettingsValue("Server",transactionStatusLabel(tx.status));tx.serverMessage?.takeIf{it.isNotBlank()}?.let{Text(it,color=transactionStatusColor(tx.status),style=MaterialTheme.typography.bodySmall)};tx.studentName?.let{SettingsValue("Student","Paid for $it")};HorizontalDivider();Text("Original eligible SMS",fontWeight=FontWeight.Bold);Text(maskAvailableBalance(tx.originalSmsMasked).ifBlank{"Original SMS is unavailable for this older record."},color=MaterialTheme.colorScheme.onSurfaceVariant)}},confirmButton={TextButton(close){Text("Close")}},dismissButton={if(developer&&!tx.localOnly&&tx.status.uppercase() in setOf("SYNCED","DUPLICATE"))TextButton({picking=true}){Text(if(tx.studentId==null)"Tag student" else "Change tag")}})
     if(picking)StudentPickerDialog(vm,tx.studentId,{picking=false}){tag(it);picking=false}
 }
 
@@ -183,7 +183,7 @@ private fun SettingsScreen(vm:MobileViewModel,themeMode:ThemeMode,onThemeModeCha
             if(session.developer)item{SettingsCard("Transaction collection","Rules remain strict for destination account xx7972."){
                 SettingsAction("Excluded payer names",onClick=exclusions)
                 SettingsAction("Scan existing SMS",detail="Recover older messages only",onClick=scanSms)
-                SettingsAction("SMS bridge diagnostics",detail="Connection, permissions and matching rules",onClick=bridge)
+                SettingsAction("System diagnostics",detail="Audit SMS, upload, D1 and staff notifications",onClick=bridge)
             }}
             item{SettingsCard("App updates","Secure updates are checked from the K10 Pay server."){
                 vm.availableUpdate?.let{Text("Version ${it.latestVersionName} is available",fontWeight=FontWeight.Bold);Button(vm::downloadUpdate,enabled=!vm.busy,modifier=Modifier.fillMaxWidth().padding(top=8.dp)){Text(if(vm.busy)"Downloading…" else "Download & install")}}?:OutlinedButton({vm.checkForUpdate()},enabled=!vm.busy,modifier=Modifier.fillMaxWidth()){Text("Check for updates")}
@@ -301,6 +301,22 @@ private fun ManagePasswordsScreen(vm:MobileViewModel,back:()->Unit){
 @Composable private fun Message(vm:MobileViewModel){if(vm.message.isNotBlank())Text(vm.message,color=if(vm.messageIsError)MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,modifier=Modifier.padding(vertical=8.dp))}
 @Composable private fun Range(label:String,enabled:Boolean,selected:Boolean,modifier:Modifier,onClick:()->Unit){OutlinedButton(onClick,enabled=enabled,modifier=modifier,colors=ButtonDefaults.outlinedButtonColors(containerColor=if(selected)MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface),contentPadding=PaddingValues(horizontal=4.dp)){Text(label)}}
 private fun money(value:Double)=NumberFormat.getCurrencyInstance(Locale("en","IN")).format(value)
+private fun transactionStatusLabel(value:String)=when(value.uppercase()){
+    "PENDING"->"Waiting to sync"
+    "UPLOADING"->"Syncing…"
+    "SYNCED"->"Synced with server"
+    "DUPLICATE"->"Already on server"
+    "FAILED"->"Sync failed — tap Refresh"
+    "REJECTED"->"Server rejected"
+    "EXCLUDED"->"Excluded"
+    else->value.replace('_',' ').lowercase().replaceFirstChar{it.uppercase()}
+}
+@Composable private fun transactionStatusColor(value:String)=when(value.uppercase()){
+    "SYNCED","DUPLICATE"->Color(0xFF4CAF75)
+    "PENDING","UPLOADING"->MaterialTheme.colorScheme.tertiary
+    "FAILED","REJECTED"->MaterialTheme.colorScheme.error
+    else->MaterialTheme.colorScheme.onSurfaceVariant
+}
 private fun formatTime(value:String)=runCatching{DateTimeFormatter.ofPattern("dd MMM uuuu, h:mm a").format(Instant.parse(value).atZone(ZoneId.systemDefault()))}.getOrDefault(value)
 private fun maskAvailableBalance(value:String)=value
     .replace(Regex("""((?:avl\.?|available|closing|current)[\s.:-]*(?:a\/?c[\s.:-]*)?bal(?:ance)?\.?[\s.:-]*(?:(?:rs\.?|inr|₹)[\s.:-]*)?)[0-9][0-9,]*(?:\.\d{1,2})?""",RegexOption.IGNORE_CASE),"\$1**")
