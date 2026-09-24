@@ -8,6 +8,8 @@ import androidx.lifecycle.viewModelScope
 import com.google.firebase.messaging.FirebaseMessaging
 import com.k10.smsbridge.Graph
 import com.k10.smsbridge.mobile.*
+import com.k10.smsbridge.sync.ConfirmedSync
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 class MobileViewModel(app:Application):AndroidViewModel(app){
@@ -18,6 +20,7 @@ class MobileViewModel(app:Application):AndroidViewModel(app){
     var range by mutableStateOf("today");private set
     var busy by mutableStateOf(false);private set
     var loadingTransactions by mutableStateOf(false);private set
+    var reconcilingTransactions by mutableStateOf(false);private set
     var message by mutableStateOf("");private set
     var messageIsError by mutableStateOf(false);private set
     var exclusions by mutableStateOf("");private set
@@ -44,6 +47,25 @@ class MobileViewModel(app:Application):AndroidViewModel(app){
     fun changePassword(current:String,next:String,onDone:()->Unit){val active=session?:return;if(busy)return;viewModelScope.launch{busy=true;clearMessage();runCatching{MobileApi.changePassword(active,current,next)}.onSuccess{logout(false);success(it);onDone()}.onFailure{failure(it,"Password change failed")};busy=false}}
     fun load(value:String,showMessage:Boolean=true){val current=session?:return;if(current.passwordChangeRequired)return;range=value;val requestId=++loadSequence;viewModelScope.launch{loadingTransactions=true;if(showMessage)clearMessage();runCatching{MobileApi.transactions(current,value)}.onSuccess{page->if(requestId==loadSequence){transactions=page.transactions;todayAmount=page.todayAmount;todayCount=page.todayCount}}.onFailure{if(requestId==loadSequence)failure(it,"Could not load transactions")};if(requestId==loadSequence)loadingTransactions=false}}
     fun refresh(){load(range,false)}
+    fun reconcileAll(){
+        if(reconcilingTransactions)return
+        viewModelScope.launch{
+            reconcilingTransactions=true
+            clearMessage()
+            val feedback=runCatching{ConfirmedSync.run(getApplication(),scanFullHistory=true,recheckAll=true)}
+                .fold(
+                    onSuccess={result->
+                        if(result.successful)success(result.userMessage()) else {message=result.userMessage();messageIsError=true}
+                        result.userMessage()
+                    },
+                    onFailure={error->failure(error,"Could not scan and sync transactions");message}
+                )
+            load(range,false)
+            reconcilingTransactions=false
+            delay(2_000)
+            if(message==feedback)clearMessage()
+        }
+    }
     fun refreshApprovals(showMessage:Boolean=true){val current=session?.takeIf{it.developer}?:return;viewModelScope.launch{if(showMessage)busy=true;runCatching{MobileApi.approvalInbox(current)}.onSuccess{requests=it.requests;managedAccounts=it.accounts;if(showMessage)success("Approval inbox refreshed")}.onFailure{failure(it,"Could not load account requests")};busy=false}}
     fun review(requestId:String,approve:Boolean){val current=session?:return;if(busy)return;viewModelScope.launch{busy=true;runCatching{MobileApi.review(current,requestId,approve)}.onSuccess{success(it);busy=false;refreshApprovals(false)}.onFailure{failure(it,"Could not review request")};busy=false}}
     fun adminReset(userId:String,password:String){val current=session?:return;if(busy)return;viewModelScope.launch{busy=true;runCatching{MobileApi.adminReset(current,userId,password)}.onSuccess{success(it);refreshApprovals(false)}.onFailure{failure(it,"Staff password reset failed")};busy=false}}
