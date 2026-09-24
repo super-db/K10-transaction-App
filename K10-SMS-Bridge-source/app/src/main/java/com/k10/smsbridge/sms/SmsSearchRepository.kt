@@ -23,7 +23,9 @@ data class SmsSearchItem(
     val body: String,
     val receivedAt: Long,
     val parseResult: ParseResult,
-    val alreadyAdded: Boolean
+    val alreadyAdded: Boolean,
+    val localStatus: String? = null,
+    val localId: String? = null
 )
 
 class SmsSearchRepository(private val context: Context, private val dao: TransactionDao) {
@@ -55,8 +57,8 @@ class SmsSearchRepository(private val context: Context, private val dao: Transac
                 if (rawTerms.any { !body.contains(it, true) }) continue
                 val parsed = SmsParser.parse(sender, body, receivedAt, rules)
                 if (filters.eligibleOnly && !parsed.eligible) continue
-                val duplicate = parsed.transaction?.let { dao.findDuplicate(it.duplicateKey) } != null
-                results += SmsSearchItem(sender, body, receivedAt, parsed, duplicate)
+                val duplicate = parsed.transaction?.let { dao.findDuplicate(it.duplicateKey) }
+                results += SmsSearchItem(sender, body, receivedAt, parsed, duplicate != null, duplicate?.syncStatus, duplicate?.uniqueLocalId)
             }
         }
         results
@@ -66,5 +68,12 @@ class SmsSearchRepository(private val context: Context, private val dao: Transac
         val transaction = SmsParser.parse(item.sender, item.body, item.receivedAt, currentRules).transaction ?: return false
         if (dao.findDuplicate(transaction.duplicateKey) != null) return false
         return dao.insert(transaction.toEntity()) != -1L
+    }
+
+    suspend fun retry(item: SmsSearchItem, currentRules: RuleConfig): Boolean {
+        val transaction = SmsParser.parse(item.sender, item.body, item.receivedAt, currentRules).transaction ?: return false
+        val saved = dao.findDuplicate(transaction.duplicateKey) ?: return false
+        dao.updateStatus(saved.uniqueLocalId, "PENDING", "Manual resync requested")
+        return true
     }
 }

@@ -324,12 +324,12 @@ private fun SearchSmsScreen(vm: BridgeViewModel, back: () -> Unit) {
                 }
             }
         }
-        items(vm.searchResults) { item -> SearchResultCard(item) { vm.import(item) } }
+        items(vm.searchResults) { item -> SearchResultCard(item, { vm.import(item) }, { vm.resync(item) }) }
     }
 }
 
 @Composable
-private fun SearchResultCard(item: SmsSearchItem, import: () -> Unit) {
+private fun SearchResultCard(item: SmsSearchItem, import: () -> Unit, resync: () -> Unit) {
     val tx = item.parseResult.transaction
     Card(Modifier.fillMaxWidth().padding(vertical = 5.dp)) {
         Column(Modifier.padding(12.dp)) {
@@ -340,7 +340,20 @@ private fun SearchResultCard(item: SmsSearchItem, import: () -> Unit) {
                 Text("A/c xx${it.accountLast4}")
             }
             when {
-                item.alreadyAdded -> Text("Saved and queued/synced ✓")
+                item.alreadyAdded -> {
+                    Text(when(item.localStatus){
+                        "PENDING" -> "Saved locally — waiting to sync"
+                        "SYNCED" -> "Synced to server ✓"
+                        "DUPLICATE" -> "Already present on server ✓"
+                        "EXCLUDED" -> "Excluded from normal history"
+                        "FAILED" -> "Sync failed"
+                        "REJECTED" -> "Server rejected this transaction"
+                        else -> "Saved locally — server status unknown"
+                    })
+                    if(item.localStatus != "PENDING" && item.localStatus != "EXCLUDED") {
+                        OutlinedButton(onClick = resync) { Text("Resync") }
+                    }
+                }
                 tx != null -> {
                     Text("Eligible — not yet saved")
                     Button(onClick = import) { Text("Save & Sync") }

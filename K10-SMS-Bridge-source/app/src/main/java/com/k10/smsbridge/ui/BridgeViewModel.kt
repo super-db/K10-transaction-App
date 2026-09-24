@@ -150,8 +150,19 @@ class BridgeViewModel(app: Application) : AndroidViewModel(app) {
             val added = searchRepository.import(item, rules())
             notifyUser(if (added) "Transaction saved and queued for sync" else "Already saved")
             if (added) {
-                searchResults = searchResults.map { if (it === item) it.copy(alreadyAdded = true) else it }
+                searchResults = searchResults.map { if (it === item) it.copy(alreadyAdded = true, localStatus = "PENDING") else it }
                 syncNow()
+            }
+        }
+    }
+
+    fun resync(item: SmsSearchItem) {
+        viewModelScope.launch {
+            val queued = searchRepository.retry(item, rules())
+            notifyUser(if (queued) "Transaction queued for resync" else "Could not find the saved transaction")
+            if (queued) {
+                searchResults = searchResults.map { if (it === item) it.copy(localStatus = "PENDING") else it }
+                enqueueSyncWork()
             }
         }
     }
@@ -163,7 +174,7 @@ class BridgeViewModel(app: Application) : AndroidViewModel(app) {
                 if (searchRepository.import(it, rules())) added++
             }
             searchResults = searchResults.map { item ->
-                if (item.parseResult.eligible) item.copy(alreadyAdded = true) else item
+                if (item.parseResult.eligible) item.copy(alreadyAdded = true, localStatus = item.localStatus ?: "PENDING") else item
             }
             notifyUser(if (added == 0) "No new eligible transactions" else "$added transaction(s) saved and queued for sync")
             if (added > 0) syncNow()

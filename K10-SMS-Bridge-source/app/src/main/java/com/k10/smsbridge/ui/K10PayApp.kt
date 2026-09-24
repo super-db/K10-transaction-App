@@ -68,7 +68,7 @@ fun K10PayApp(darkMode:Boolean,themeMode:ThemeMode,onThemeModeChange:(ThemeMode)
             "roles"->StaffAccessScreen(vm){screen="settings"}
             "approvals"->ApprovalScreen(vm){screen="home"}
             "settings"->SettingsScreen(vm,themeMode,onThemeModeChange,{screen="home"},{screen="bridge_settings"},{screen="bridge_search"},{vm.loadExclusions();screen="exclusions"},{if(vm.session?.developer==true)vm.refreshApprovals(false);screen="passwords"},{vm.refreshApprovals(false);screen="roles"})
-            else->MobileHome(vm,{screen="approvals"},{screen="settings"})
+            else->{LaunchedEffect(Unit){vm.refresh()};MobileHome(vm,{screen="approvals"},{screen="settings"})}
         }
     }
 }
@@ -144,7 +144,7 @@ private fun MobileHome(vm:MobileViewModel,openApprovals:()->Unit,openSettings:()
 
 @Composable private fun TransactionDetailDialog(tx:MobileTransaction,developer:Boolean,vm:MobileViewModel,close:()->Unit,tag:(String?)->Unit){
     var picking by remember{mutableStateOf(false)}
-    AlertDialog(onDismissRequest=close,title={Text(tx.payerName)},text={Column(Modifier.verticalScroll(rememberScrollState()),verticalArrangement=Arrangement.spacedBy(8.dp)){Text(tx.amount?.let(::money)?:money(0.0),style=MaterialTheme.typography.headlineMedium,fontWeight=FontWeight.Bold,color=MaterialTheme.colorScheme.primary);SettingsValue("Received",formatTime(tx.occurredAt));SettingsValue("Method",tx.paymentMethod);tx.studentName?.let{SettingsValue("Student","Paid for $it")};HorizontalDivider();Text("Original eligible SMS",fontWeight=FontWeight.Bold);Text(tx.originalSmsMasked.ifBlank{"Original SMS is unavailable for this older record."},color=MaterialTheme.colorScheme.onSurfaceVariant)}},confirmButton={TextButton(close){Text("Close")}},dismissButton={if(developer)TextButton({picking=true}){Text(if(tx.studentId==null)"Tag student" else "Change tag")}})
+    AlertDialog(onDismissRequest=close,title={Text(tx.payerName)},text={Column(Modifier.verticalScroll(rememberScrollState()),verticalArrangement=Arrangement.spacedBy(8.dp)){Text(tx.amount?.let(::money)?:money(0.0),style=MaterialTheme.typography.headlineMedium,fontWeight=FontWeight.Bold,color=MaterialTheme.colorScheme.primary);SettingsValue("Received",formatTime(tx.occurredAt));SettingsValue("Method",tx.paymentMethod);tx.studentName?.let{SettingsValue("Student","Paid for $it")};HorizontalDivider();Text("Original eligible SMS",fontWeight=FontWeight.Bold);Text(maskAvailableBalance(tx.originalSmsMasked).ifBlank{"Original SMS is unavailable for this older record."},color=MaterialTheme.colorScheme.onSurfaceVariant)}},confirmButton={TextButton(close){Text("Close")}},dismissButton={if(developer)TextButton({picking=true}){Text(if(tx.studentId==null)"Tag student" else "Change tag")}})
     if(picking)StudentPickerDialog(vm,tx.studentId,{picking=false}){tag(it);picking=false}
 }
 
@@ -301,6 +301,9 @@ private fun ManagePasswordsScreen(vm:MobileViewModel,back:()->Unit){
 @Composable private fun Range(label:String,enabled:Boolean,selected:Boolean,modifier:Modifier,onClick:()->Unit){OutlinedButton(onClick,enabled=enabled,modifier=modifier,colors=ButtonDefaults.outlinedButtonColors(containerColor=if(selected)MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface),contentPadding=PaddingValues(horizontal=4.dp)){Text(label)}}
 private fun money(value:Double)=NumberFormat.getCurrencyInstance(Locale("en","IN")).format(value)
 private fun formatTime(value:String)=runCatching{DateTimeFormatter.ofPattern("dd MMM uuuu, h:mm a").format(Instant.parse(value).atZone(ZoneId.systemDefault()))}.getOrDefault(value)
+private fun maskAvailableBalance(value:String)=value
+    .replace(Regex("""((?:avl\.?|available|closing|current)[\s.:-]*(?:a\/?c[\s.:-]*)?bal(?:ance)?\.?[\s.:-]*(?:(?:rs\.?|inr|₹)[\s.:-]*)?)[0-9][0-9,]*(?:\.\d{1,2})?""",RegexOption.IGNORE_CASE),"\$1**")
+    .replace(Regex("""(balance\.?[\s.:-]*(?:(?:is|rs\.?|inr|₹)[\s.:-]*)?)[0-9][0-9,]*(?:\.\d{1,2})?""",RegexOption.IGNORE_CASE),"\$1**")
 private fun roleName(value:String)=when(value){"developer"->"Developer";"transaction_supervisor"->"Transaction Supervisor";else->"Transaction Viewer"}
 private fun historyName(value:String)=when(value){"15d"->"Up to 15 days";"30d"->"Up to 30 days";"lifetime"->"Lifetime";else->"Today only"}
 private fun rangeName(value:String)=when(value){"15d"->"last 15 days";"30d"->"last 30 days";"all"->"lifetime";else->"today"}

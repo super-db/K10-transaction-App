@@ -20,6 +20,7 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
             .onSuccess { Graph.rules.applyRemote(it) }
 
         var retryNeeded = false
+        var cloudStateChanged = false
         Graph.database.transactions().pending().forEach { item ->
             runCatching { BackendClient.upload(settings.backendUrl, token, item) }
                 .onSuccess { response ->
@@ -33,12 +34,14 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
                     }
                     Graph.database.transactions().updateStatus(item.uniqueLocalId, localStatus, response.message)
                     if (localStatus == "FAILED") retryNeeded = true
+                    else cloudStateChanged = true
                 }
                 .onFailure {
                     Graph.database.transactions().updateStatus(item.uniqueLocalId, "FAILED", "Temporary connection error")
                     retryNeeded = true
                 }
         }
+        if (cloudStateChanged) Graph.transactionEvents.tryEmit(Unit)
         return if (retryNeeded) Result.retry() else Result.success()
     }
 
