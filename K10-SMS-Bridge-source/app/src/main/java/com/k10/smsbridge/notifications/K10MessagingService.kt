@@ -14,6 +14,7 @@ import com.google.firebase.messaging.RemoteMessage
 import com.k10.smsbridge.Graph
 import com.k10.smsbridge.MainActivity
 import com.k10.smsbridge.mobile.MobileApi
+import com.k10.smsbridge.mobile.DeviceRegistrationStatus
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -37,6 +38,10 @@ class K10MessagingService : FirebaseMessagingService() {
 
     override fun onMessageReceived(message: RemoteMessage) {
         val data = message.data
+        if (data["type"] == "diagnostic_probe") {
+            acknowledge(data["probeId"] ?: message.messageId ?: return, "diagnostic_probe")
+            return
+        }
         val approval = data["type"] == "account_approval"
         if (!approval && data["type"] != "slice_transaction") return
         val localPreferences = Graph.mobileSession.load()?.notificationPreferences
@@ -45,7 +50,9 @@ class K10MessagingService : FirebaseMessagingService() {
         val voiceEnabled = !approval && (data["voiceEnabled"]?.toBooleanStrictOrNull() ?: localPreferences?.voiceAnnouncements ?: true)
         if (!alertEnabled && !voiceEnabled) return
 
-        val deliveryId = data["requestId"] ?: data["transactionId"] ?: message.messageId ?: return
+        // The backend outbox id is the acknowledgement key. Older payloads did
+        // not include it, so retain transaction/request ids as rollout fallbacks.
+        val deliveryId = data["deliveryId"] ?: data["requestId"] ?: data["transactionId"] ?: message.messageId ?: return
         val deliveries = getSharedPreferences("k10_pay_deliveries", Context.MODE_PRIVATE)
         if (deliveries.contains(deliveryId)) return
         if (voiceEnabled) data["amount"]?.toDoubleOrNull()?.let { Graph.announcer.announceReceived((it * 100).roundToLong()) }
@@ -58,6 +65,16 @@ class K10MessagingService : FirebaseMessagingService() {
         }
         editor.apply()
         Graph.transactionEvents.tryEmit(Unit)
+        acknowledge(deliveryId, data["type"].orEmpty())
+    }
+
+    private fun acknowledge(deliveryId: String, type: String) {
+        Graph.mobileSession.load()?.let { session ->
+            val deviceId = Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID) ?: "k10-unknown-device"
+            CoroutineScope(Dispatchers.IO).launch {
+                runCatching { MobileApi.acknowledgeDelivery(session, deviceId, deliveryId, type) }
+            }
+        }
     }
 
     private fun showNotification(data: Map<String, String>, approval: Boolean, deliveryId: String) {
@@ -75,7 +92,11 @@ class K10MessagingService : FirebaseMessagingService() {
     override fun onNewToken(token: String) {
         val session = Graph.mobileSession.load() ?: return
         val deviceId = Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID) ?: "k10-unknown-device"
-        CoroutineScope(Dispatchers.IO).launch { runCatching { MobileApi.register(session, token, deviceId, session.developer) } }
+        CoroutineScope(Dispatchers.IO).launch {
+            runCatching { MobileApi.register(session, token, deviceId, session.developer) }
+                .onSuccess { DeviceRegistrationStatus.success(this@K10MessagingService) }
+                .onFailure { DeviceRegistrationStatus.failure(this@K10MessagingService, it.message ?: "Device registration failed") }
+        }
     }
 
     companion object {
