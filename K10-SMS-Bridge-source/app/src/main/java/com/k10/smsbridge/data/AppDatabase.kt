@@ -47,8 +47,11 @@ interface TransactionDao {
     @Query("SELECT * FROM transactions WHERE duplicateKey = :key LIMIT 1")
     suspend fun findDuplicate(key: String): TransactionEntity?
 
-    @Query("SELECT * FROM transactions WHERE syncStatus IN ('PENDING','FAILED') ORDER BY createdAt LIMIT 100")
+    @Query("SELECT * FROM transactions WHERE syncStatus IN ('PENDING','FAILED') ORDER BY createdAt")
     suspend fun pending(): List<TransactionEntity>
+
+    @Query("SELECT * FROM transactions ORDER BY createdAt")
+    suspend fun allForServerCheck(): List<TransactionEntity>
 
     @Query("UPDATE transactions SET syncStatus = :status, serverMessage = :message, statusUpdatedAt = :updatedAt WHERE uniqueLocalId = :id")
     suspend fun updateStatus(id: String, status: String, message: String?, updatedAt: Long = System.currentTimeMillis())

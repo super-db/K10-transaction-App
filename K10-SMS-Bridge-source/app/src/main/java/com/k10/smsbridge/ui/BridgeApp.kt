@@ -317,6 +317,14 @@ private fun SearchSmsScreen(vm: BridgeViewModel, back: () -> Unit) {
                     color = if (vm.searchResults.isEmpty()) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
                 )
                 Spacer(Modifier.height(8.dp))
+                OutlinedButton(
+                    onClick = vm::syncAll,
+                    enabled = !vm.isSyncingAll,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(if (vm.isSyncingAll) "Scanning and syncing…" else "Sync all")
+                }
+                Spacer(Modifier.height(8.dp))
             }
             if (vm.searchResults.any { it.parseResult.eligible && !it.alreadyAdded }) {
                 Button(onClick = vm::importAll, modifier = Modifier.fillMaxWidth()) {
@@ -350,8 +358,8 @@ private fun SearchResultCard(item: SmsSearchItem, import: () -> Unit, resync: ()
                         "REJECTED" -> "Server rejected this transaction"
                         else -> "Saved locally — server status unknown"
                     })
-                    if(item.localStatus != "PENDING" && item.localStatus != "EXCLUDED") {
-                        OutlinedButton(onClick = resync) { Text("Resync") }
+                    if(item.localStatus != "EXCLUDED") {
+                        OutlinedButton(onClick = resync) { Text(if(item.localStatus == "PENDING") "Sync now" else "Resync") }
                     }
                 }
                 tx != null -> {

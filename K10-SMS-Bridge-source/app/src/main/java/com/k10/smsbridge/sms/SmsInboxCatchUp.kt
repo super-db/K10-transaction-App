@@ -20,7 +20,12 @@ object SmsInboxCatchUp {
     private const val OVERLAP_MILLIS = 60 * 1000L
     private const val ALERT_WINDOW_MILLIS = 10 * 60 * 1000L
 
-    suspend fun importMissed(context: Context, rules: RuleConfig, dao: TransactionDao): Int = withContext(Dispatchers.IO) {
+    suspend fun importMissed(
+        context: Context,
+        rules: RuleConfig,
+        dao: TransactionDao,
+        fullHistory: Boolean = false
+    ): Int = withContext(Dispatchers.IO) {
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.READ_SMS) != PackageManager.PERMISSION_GRANTED) {
             return@withContext 0
         }
@@ -28,7 +33,7 @@ object SmsInboxCatchUp {
         val now = System.currentTimeMillis()
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         val previous = prefs.getLong(LAST_SCAN, now - FIRST_SCAN_LOOKBACK_MILLIS)
-        val from = (previous - OVERLAP_MILLIS).coerceAtLeast(0L)
+        val from = if (fullHistory) 0L else (previous - OVERLAP_MILLIS).coerceAtLeast(0L)
         var added = 0
 
         try {

@@ -19,8 +19,8 @@ android {
         applicationId = "com.k10.smsbridge"
         minSdk = 26
         targetSdk = 35
-        versionCode = providers.environmentVariable("K10_VERSION_CODE").orNull?.toIntOrNull() ?: 14
-        versionName = providers.environmentVariable("K10_VERSION_NAME").orNull ?: "4.3.1"
+        versionCode = providers.environmentVariable("K10_VERSION_CODE").orNull?.toIntOrNull() ?: 15
+        versionName = providers.environmentVariable("K10_VERSION_NAME").orNull ?: "4.3.2"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 

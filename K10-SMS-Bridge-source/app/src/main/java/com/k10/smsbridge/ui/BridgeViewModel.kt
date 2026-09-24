@@ -17,6 +17,7 @@ import com.k10.smsbridge.sms.SmsSearchFilters
 import com.k10.smsbridge.sms.SmsSearchItem
 import com.k10.smsbridge.sms.SmsSearchRepository
 import com.k10.smsbridge.sync.BackendClient
+import com.k10.smsbridge.sync.ConfirmedSync
 import com.k10.smsbridge.sync.SyncWorker
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -49,10 +50,13 @@ class BridgeViewModel(app: Application) : AndroidViewModel(app) {
         private set
     var isSyncing: Boolean by androidx.compose.runtime.mutableStateOf(false)
         private set
+    var isSyncingAll: Boolean by androidx.compose.runtime.mutableStateOf(false)
+        private set
     var hasSearched: Boolean by androidx.compose.runtime.mutableStateOf(false)
         private set
 
     private val searchRepository = SmsSearchRepository(app, Graph.database.transactions())
+    private var lastSearchFilters: SmsSearchFilters? = null
 
     fun rules() = Graph.rules.current()
     fun rulesLastSync() = Graph.rules.lastSyncEpochMillis()
@@ -131,6 +135,7 @@ class BridgeViewModel(app: Application) : AndroidViewModel(app) {
         if (isSearching) return
         viewModelScope.launch {
             isSearching = true
+            lastSearchFilters = filters
             runCatching { searchRepository.search(filters, rules()) }
                 .onSuccess {
                     searchResults = it
@@ -157,14 +162,43 @@ class BridgeViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun resync(item: SmsSearchItem) {
+        if (isSyncingAll) return
         viewModelScope.launch {
             val queued = searchRepository.retry(item, rules())
-            notifyUser(if (queued) "Transaction queued for resync" else "Could not find the saved transaction")
             if (queued) {
                 searchResults = searchResults.map { if (it === item) it.copy(localStatus = "PENDING") else it }
-                enqueueSyncWork()
+                isSyncingAll = true
+                runCatching { ConfirmedSync.run(getApplication(), scanFullHistory = false, recheckAll = false) }
+                    .onSuccess {
+                        refreshSearchResults()
+                        notifyUser(it.userMessage())
+                    }
+                    .onFailure { notifyUser(it.message ?: "Transaction sync failed") }
+                isSyncingAll = false
+            } else {
+                notifyUser("Could not find the saved transaction")
             }
         }
+    }
+
+    fun syncAll() {
+        if (isSyncingAll) return
+        viewModelScope.launch {
+            isSyncingAll = true
+            notifyUser("Scanning SMS and checking server…")
+            runCatching { ConfirmedSync.run(getApplication(), scanFullHistory = true, recheckAll = true) }
+                .onSuccess {
+                    refreshSearchResults()
+                    notifyUser(it.userMessage())
+                }
+                .onFailure { notifyUser(it.message ?: "Sync all failed") }
+            isSyncingAll = false
+        }
+    }
+
+    private suspend fun refreshSearchResults() {
+        val filters = lastSearchFilters ?: return
+        searchResults = searchRepository.search(filters, rules())
     }
 
     fun importAll() {
