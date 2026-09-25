@@ -13,7 +13,9 @@ import androidx.lifecycle.viewModelScope
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import com.k10.smsbridge.Graph
+import com.k10.smsbridge.data.DiagnosticEventLogEntity
 import com.k10.smsbridge.data.TransactionEntity
+import com.k10.smsbridge.diagnostics.DiagnosticEventLog
 import com.k10.smsbridge.rules.BridgeSettings
 import com.k10.smsbridge.mobile.DeviceRegistrationStatus
 import com.k10.smsbridge.sms.SmsSearchFilters
@@ -39,7 +41,18 @@ data class SystemDiagnostic(
     val diagnosticId: String? = null
 )
 
+data class ServerDiagnosticLogLine(
+    val timestamp: String,
+    val level: String,
+    val code: String,
+    val stage: String,
+    val message: String,
+    val transactionId: String? = null,
+    val referenceId: String? = null
+)
+
 class BridgeViewModel(app: Application) : AndroidViewModel(app) {
+    val localDiagnosticLogs: Flow<List<DiagnosticEventLogEntity>> = Graph.database.diagnosticLogs().observeRecent(100)
     val transactions: Flow<List<TransactionEntity>> = Graph.database.transactions().observeAll().map { rows ->
         val excluded = Graph.rules.current().excludedPayerNames.map { it.trim().lowercase() }.toSet()
         rows.filter { it.syncStatus != "EXCLUDED" && it.payerName.trim().lowercase() !in excluded }
@@ -75,6 +88,8 @@ class BridgeViewModel(app: Application) : AndroidViewModel(app) {
     var diagnosticChecks: List<SystemDiagnostic> by androidx.compose.runtime.mutableStateOf(emptyList())
         private set
     var diagnosticsRunAt: Long by androidx.compose.runtime.mutableLongStateOf(0L)
+        private set
+    var serverDiagnosticLogs: List<ServerDiagnosticLogLine> by androidx.compose.runtime.mutableStateOf(emptyList())
         private set
 
     private val searchRepository = SmsSearchRepository(app, Graph.database.transactions())
@@ -216,6 +231,8 @@ class BridgeViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             isRunningDiagnostics = true
             diagnosticChecks = emptyList()
+            serverDiagnosticLogs = emptyList()
+            DiagnosticEventLog.info("DIAGNOSTIC_RUN_STARTED", "diagnostics", "Full system diagnostic started")
             val app = getApplication<Application>()
             val checks = mutableListOf<SystemDiagnostic>()
             val smsGranted = androidx.core.content.ContextCompat.checkSelfPermission(app, Manifest.permission.RECEIVE_SMS) == PackageManager.PERMISSION_GRANTED &&
@@ -255,8 +272,12 @@ class BridgeViewModel(app: Application) : AndroidViewModel(app) {
                 val health = com.k10.smsbridge.sync.BackendClient.health(settings.backendUrl.trimEnd('/'), token)
                 checks += SystemDiagnostic("backend", "Backend API & authentication", if (health.healthy) "working" else "failed", "${health.message}${health.httpCode?.let { " · HTTP $it" }.orEmpty()}", if (health.healthy) null else "Verify the deployed API and SMS Bridge token")
                 if (health.healthy) {
-                    com.k10.smsbridge.sync.BackendClient.diagnostics(settings.backendUrl.trimEnd('/'), token).forEach { component ->
+                    val report = com.k10.smsbridge.sync.BackendClient.diagnostics(settings.backendUrl.trimEnd('/'), token)
+                    report.components.forEach { component ->
                         checks += SystemDiagnostic(component.key, diagnosticTitle(component.key), component.status, component.detail, component.suggestion, component.code, component.diagnosticId)
+                    }
+                    serverDiagnosticLogs = report.logs.map {
+                        ServerDiagnosticLogLine(it.timestamp, it.level, it.code, it.stage, it.message, it.transactionId, it.referenceId)
                     }
                 }
             }
@@ -278,6 +299,7 @@ class BridgeViewModel(app: Application) : AndroidViewModel(app) {
 
             diagnosticChecks = checks.distinctBy { it.key }
             diagnosticsRunAt = System.currentTimeMillis()
+            DiagnosticEventLog.info("DIAGNOSTIC_RUN_COMPLETED", "diagnostics", "Full system diagnostic completed with ${diagnosticChecks.count { it.status == "failed" }} failed check(s)")
             isRunningDiagnostics = false
         }
     }
