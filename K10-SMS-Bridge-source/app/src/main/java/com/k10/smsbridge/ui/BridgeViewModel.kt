@@ -34,7 +34,9 @@ data class SystemDiagnostic(
     val title: String,
     val status: String,
     val detail: String,
-    val suggestion: String? = null
+    val suggestion: String? = null,
+    val code: String = "${key.uppercase()}_${status.uppercase()}",
+    val diagnosticId: String? = null
 )
 
 class BridgeViewModel(app: Application) : AndroidViewModel(app) {
@@ -254,7 +256,7 @@ class BridgeViewModel(app: Application) : AndroidViewModel(app) {
                 checks += SystemDiagnostic("backend", "Backend API & authentication", if (health.healthy) "working" else "failed", "${health.message}${health.httpCode?.let { " · HTTP $it" }.orEmpty()}", if (health.healthy) null else "Verify the deployed API and SMS Bridge token")
                 if (health.healthy) {
                     com.k10.smsbridge.sync.BackendClient.diagnostics(settings.backendUrl.trimEnd('/'), token).forEach { component ->
-                        checks += SystemDiagnostic(component.key, diagnosticTitle(component.key), component.status, component.detail, component.suggestion)
+                        checks += SystemDiagnostic(component.key, diagnosticTitle(component.key), component.status, component.detail, component.suggestion, component.code, component.diagnosticId)
                     }
                 }
             }
