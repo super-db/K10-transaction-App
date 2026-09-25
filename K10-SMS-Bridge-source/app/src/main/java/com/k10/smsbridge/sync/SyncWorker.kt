@@ -5,6 +5,7 @@ import androidx.work.CoroutineWorker
 import androidx.work.Data
 import androidx.work.WorkerParameters
 import com.k10.smsbridge.Graph
+import com.k10.smsbridge.diagnostics.DiagnosticEventLog
 import com.k10.smsbridge.sms.SmsInboxCatchUp
 
 class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
@@ -12,12 +13,15 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
         val settings = Graph.rules.settings()
         if (!settings.serviceEnabled) return Result.success()
 
+        DiagnosticEventLog.info("UPLOAD_WORK_STARTED", "work", "Background scan and upload worker started")
+
         val interactive = inputData.getBoolean(KEY_INTERACTIVE, false)
         val fullHistory = inputData.getBoolean(KEY_FULL_HISTORY, false)
         val recheckAll = inputData.getBoolean(KEY_RECHECK_ALL, false)
         val dao = Graph.database.transactions()
         val rules = Graph.rules.current()
         val scanned = SmsInboxCatchUp.importMissed(applicationContext, rules, dao, fullHistory)
+        if (scanned > 0) DiagnosticEventLog.warning("SMS_RECOVERY_FOUND", "sms_recovery", "$scanned missed transaction(s) recovered from SMS inbox")
         if (settings.backendUrl.isBlank()) {
             return configuredFailure(interactive, scanned, "Backend URL is not configured")
         }
@@ -46,6 +50,7 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
         var duplicates = 0
         var excluded = 0
         val pending = dao.pending()
+        DiagnosticEventLog.info("UPLOAD_QUEUE_PROCESSING", "work", "Processing ${pending.size} pending transaction(s)")
         pending.forEach { item ->
             val outcome = TransactionSyncCoordinator.uploadOne(item)
             when (outcome.status) {
@@ -76,6 +81,7 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
                 }
             }
             .build()
+        DiagnosticEventLog.info("UPLOAD_WORK_COMPLETED", "work", "Upload worker completed · $synced synced · $duplicates duplicate · ${temporaryFailures + authenticationFailures + unexpectedFailures} failed")
         return when {
             temporaryFailures + authenticationFailures + unexpectedFailures == 0 -> Result.success(output)
             interactive -> Result.failure(output)
