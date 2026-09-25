@@ -8,6 +8,7 @@ import androidx.core.content.ContextCompat
 import com.k10.smsbridge.Graph
 import com.k10.smsbridge.data.TransactionDao
 import com.k10.smsbridge.data.toEntity
+import com.k10.smsbridge.diagnostics.DiagnosticEventLog
 import com.k10.smsbridge.rules.RuleConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -18,7 +19,6 @@ object SmsInboxCatchUp {
     private const val LAST_SCAN = "last_scan_epoch"
     private const val FIRST_SCAN_LOOKBACK_MILLIS = 24 * 60 * 60 * 1000L
     private const val OVERLAP_MILLIS = 60 * 1000L
-    private const val ALERT_WINDOW_MILLIS = 10 * 60 * 1000L
 
     suspend fun importMissed(
         context: Context,
@@ -57,20 +57,13 @@ object SmsInboxCatchUp {
                     val entity = parsed.toEntity()
                     if (dao.insert(entity) != -1L) {
                         added++
-                        if (entity.smsReceivedTimestamp >= now - ALERT_WINDOW_MILLIS) {
-                            val preferences = Graph.mobileSession.load()?.notificationPreferences
-                            if (!parsed.payerExcluded && preferences?.voiceAnnouncements != false) {
-                                Graph.announcer.announceReceived(entity.amountMinor)
-                            }
-                            if (!parsed.payerExcluded && preferences?.transactionAlerts != false) {
-                                Graph.notifier.notifyReceived(entity.amountMinor, entity.payerName, entity.uniqueLocalId)
-                            }
-                        }
+                        DiagnosticEventLog.warning("TX_RECOVERED_FROM_INBOX", "sms_recovery", "Eligible transaction recovered from the SMS inbox", entity.uniqueLocalId)
                     }
                 }
             }
             prefs.edit().putLong(LAST_SCAN, now).apply()
         } catch (_: SecurityException) {
+            DiagnosticEventLog.error("SMS_INBOX_PERMISSION_DENIED", "sms_recovery", "Android denied SMS inbox access")
             return@withContext 0
         }
         if (added > 0) Graph.transactionEvents.tryEmit(Unit)

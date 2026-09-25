@@ -42,6 +42,21 @@ data class TransactionEntity(
     val createdAt: Long = System.currentTimeMillis()
 )
 
+@Entity(
+    tableName = "diagnostic_event_logs",
+    indices = [Index(value = ["timestamp"]), Index(value = ["transactionLocalId"])]
+)
+data class DiagnosticEventLogEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val timestamp: Long = System.currentTimeMillis(),
+    val level: String,
+    val code: String,
+    val stage: String,
+    val message: String,
+    val transactionLocalId: String? = null,
+    val referenceId: String? = null
+)
+
 @Dao
 interface TransactionDao {
     @Insert(onConflict = OnConflictStrategy.IGNORE)
@@ -88,9 +103,22 @@ interface TransactionDao {
     fun observeDetectedSince(since: Long): Flow<Int>
 }
 
-@Database(entities = [TransactionEntity::class], version = 2, exportSchema = false)
+@Dao
+interface DiagnosticEventLogDao {
+    @Insert
+    suspend fun insert(item: DiagnosticEventLogEntity)
+
+    @Query("SELECT * FROM diagnostic_event_logs ORDER BY timestamp DESC, id DESC LIMIT :limit")
+    fun observeRecent(limit: Int = 100): Flow<List<DiagnosticEventLogEntity>>
+
+    @Query("DELETE FROM diagnostic_event_logs WHERE id NOT IN (SELECT id FROM diagnostic_event_logs ORDER BY timestamp DESC, id DESC LIMIT :keep)")
+    suspend fun trimToLatest(keep: Int = 500)
+}
+
+@Database(entities = [TransactionEntity::class, DiagnosticEventLogEntity::class], version = 3, exportSchema = false)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun transactions(): TransactionDao
+    abstract fun diagnosticLogs(): DiagnosticEventLogDao
 
     companion object {
         private val MIGRATION_1_2 = object : Migration(1, 2) {
@@ -102,10 +130,18 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE TABLE IF NOT EXISTS diagnostic_event_logs (id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, timestamp INTEGER NOT NULL, level TEXT NOT NULL, code TEXT NOT NULL, stage TEXT NOT NULL, message TEXT NOT NULL, transactionLocalId TEXT, referenceId TEXT)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_diagnostic_event_logs_timestamp ON diagnostic_event_logs(timestamp)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_diagnostic_event_logs_transactionLocalId ON diagnostic_event_logs(transactionLocalId)")
+            }
+        }
+
         fun create(context: Context): AppDatabase = Room.databaseBuilder(
             context,
             AppDatabase::class.java,
             "k10_sms_bridge.db"
-        ).addMigrations(MIGRATION_1_2).build()
+        ).addMigrations(MIGRATION_1_2, MIGRATION_2_3).build()
     }
 }

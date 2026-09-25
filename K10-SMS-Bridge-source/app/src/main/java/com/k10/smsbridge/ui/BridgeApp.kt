@@ -1,6 +1,9 @@
 package com.k10.smsbridge.ui
 
 import android.Manifest
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
 import androidx.activity.compose.BackHandler
@@ -47,6 +50,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
@@ -105,7 +109,10 @@ fun BridgeApp(initialScreen: String = "settings", exit: () -> Unit = {}, vm: Bri
 
 @Composable
 private fun SystemDiagnosticsScreen(vm: BridgeViewModel, back: () -> Unit) {
+    val context = LocalContext.current
+    val localLogs by vm.localDiagnosticLogs.collectAsState(initial = emptyList())
     var showConfiguration by remember { mutableStateOf(false) }
+    var showLogs by remember { mutableStateOf(false) }
     val saved = remember { vm.settings() }
     var url by remember { mutableStateOf(saved.backendUrl) }
     var token by remember { mutableStateOf(vm.token()) }
@@ -132,6 +139,34 @@ private fun SystemDiagnosticsScreen(vm: BridgeViewModel, back: () -> Unit) {
         Text("Run the diagnostic to create a system report.", modifier = Modifier.padding(vertical = 20.dp))
     }
 
+    val renderedLogs = remember(localLogs, vm.serverDiagnosticLogs) {
+        val local = localLogs.map {
+            RenderedDiagnosticLog(it.timestamp, it.level, it.code, it.stage, it.message, it.referenceId, "PHONE")
+        }
+        val server = vm.serverDiagnosticLogs.map {
+            RenderedDiagnosticLog(runCatching { Instant.parse(it.timestamp).toEpochMilli() }.getOrDefault(0L), it.level, it.code, it.stage, it.message, it.referenceId ?: it.transactionId, "SERVER")
+        }
+        (local + server).sortedByDescending { it.timestamp }.take(100)
+    }
+    HorizontalDivider(Modifier.padding(top = 14.dp, bottom = 10.dp))
+    OutlinedButton(onClick = { showLogs = !showLogs }, modifier = Modifier.fillMaxWidth()) {
+        Text(if (showLogs) "Hide diagnostic log report" else "Diagnostic log report (${renderedLogs.size})")
+    }
+    if (showLogs) {
+        Text("Timestamped phone and server events. Raw SMS text and secret tokens are never included.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 8.dp))
+        OutlinedButton(
+            onClick = {
+                val report = renderedLogs.asReversed().joinToString("\n") { log ->
+                    "${formatTimestamp(log.timestamp)} ${log.source} ${log.level} ${log.code} [${log.stage}] ${log.message}${log.referenceId?.let { " ref=$it" }.orEmpty()}"
+                }
+                (context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("K10 Pay diagnostic log", report))
+            },
+            enabled = renderedLogs.isNotEmpty(),
+            modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
+        ) { Text("Copy log report") }
+        renderedLogs.forEach { log -> DiagnosticLogRow(log) }
+    }
+
     HorizontalDivider(Modifier.padding(vertical = 14.dp))
     OutlinedButton(onClick = { showConfiguration = !showConfiguration }, modifier = Modifier.fillMaxWidth()) {
         Text(if (showConfiguration) "Hide connection configuration" else "Connection configuration")
@@ -144,6 +179,33 @@ private fun SystemDiagnosticsScreen(vm: BridgeViewModel, back: () -> Unit) {
         Field(senders, { senders = it }, "Known Slice sender IDs")
         Row(verticalAlignment = Alignment.CenterVertically) { Text("Collection service enabled", Modifier.weight(1f)); Switch(enabled, { enabled = it }) }
         Button(onClick = { vm.saveSettings(url, token, enabled, account, senders); vm.runFullDiagnostics() }, enabled = !vm.isSaving, modifier = Modifier.fillMaxWidth()) { Text(if (vm.isSaving) "Saving…" else "Save & retest") }
+    }
+}
+
+private data class RenderedDiagnosticLog(
+    val timestamp: Long,
+    val level: String,
+    val code: String,
+    val stage: String,
+    val message: String,
+    val referenceId: String?,
+    val source: String
+)
+
+@Composable
+private fun DiagnosticLogRow(log: RenderedDiagnosticLog) {
+    val levelColor = when (log.level.uppercase()) {
+        "ERROR" -> MaterialTheme.colorScheme.error
+        "WARNING" -> MaterialTheme.colorScheme.tertiary
+        else -> MaterialTheme.colorScheme.primary
+    }
+    Card(Modifier.fillMaxWidth().padding(top = 7.dp)) {
+        Column(Modifier.padding(11.dp)) {
+            Text("${formatTimestamp(log.timestamp)}  ${log.source}", fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("${log.level.uppercase()}  ${log.code}", fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold, color = levelColor, modifier = Modifier.padding(top = 3.dp))
+            Text("[${log.stage}] ${log.message}", fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 3.dp))
+            log.referenceId?.let { Text("ref: $it", fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 3.dp)) }
+        }
     }
 }
 
