@@ -161,6 +161,10 @@ private fun DiagnosticCard(check: SystemDiagnostic) {
                 Text(check.status.replace('_', ' ').uppercase(), color = color, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
             }
             Text(check.detail, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 4.dp))
+            Text("Diagnostic code: ${check.code}", color = color, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 5.dp))
+            check.diagnosticId?.let { reference ->
+                Text("Diagnostic reference: $reference", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall)
+            }
             check.suggestion?.let { Text("Suggested: $it", color = color, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 6.dp)) }
         }
     }
