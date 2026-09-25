@@ -12,7 +12,8 @@ data class UploadResult(
     val message: String?,
     val serverTransactionId: String? = null,
     val httpCode: Int? = null,
-    val errorCode: String? = null
+    val errorCode: String? = null,
+    val traceId: String? = null
 )
 
 data class HealthResult(
@@ -25,8 +26,10 @@ data class HealthResult(
 data class BackendDiagnosticComponent(
     val key: String,
     val status: String,
+    val code: String,
     val detail: String,
-    val suggestion: String? = null
+    val suggestion: String? = null,
+    val diagnosticId: String? = null
 )
 
 object BackendClient {
@@ -67,12 +70,13 @@ object BackendClient {
         val serverId = listOf("transaction_id", "transactionId", "id")
             .firstNotNullOfOrNull { key -> response?.optString(key)?.takeIf { it.isNotBlank() } }
         val errorCode = response?.optString("code")?.takeIf { it.isNotBlank() }
+        val traceId = response?.optString("trace_id")?.takeIf { it.isNotBlank() }
         when {
-            code in 200..299 -> UploadResult(response?.optString("status", "success") ?: "success", message, serverId, code, errorCode)
-            code == 409 -> UploadResult("duplicate", message ?: "Already stored on server", serverId, code, errorCode)
-            code == 401 || code == 403 -> UploadResult("authentication_error", message ?: "Authentication failed", serverId, code, errorCode)
-            code in 400..499 -> UploadResult("rejected", message ?: "Validation rejected", serverId, code, errorCode)
-            else -> UploadResult("temporary_failure", message ?: "Server returned HTTP $code", serverId, code, errorCode)
+            code in 200..299 -> UploadResult(response?.optString("status", "success") ?: "success", message, serverId, code, errorCode, traceId)
+            code == 409 -> UploadResult("duplicate", message ?: "Already stored on server", serverId, code, errorCode, traceId)
+            code == 401 || code == 403 -> UploadResult("authentication_error", message ?: "Authentication failed", serverId, code, errorCode, traceId)
+            code in 400..499 -> UploadResult("rejected", message ?: "Validation rejected", serverId, code, errorCode, traceId)
+            else -> UploadResult("temporary_failure", message ?: "Server returned HTTP $code", serverId, code, errorCode, traceId)
         }
     }
 
@@ -99,24 +103,27 @@ object BackendClient {
         runCatching {
             val (code, body) = request("$baseUrl/api/k10-pay/diagnostics", "POST", token, "{}")
             if (code == 404) return@runCatching listOf(
-                BackendDiagnosticComponent("backend_diagnostics", "unavailable", "Backend diagnostic endpoint is not deployed", "Deploy the K10 Pay backend diagnostics route")
+                BackendDiagnosticComponent("backend_diagnostics", "unavailable", "DIAGNOSTICS_NOT_DEPLOYED", "Backend diagnostic endpoint is not deployed", "Deploy the K10 Pay backend diagnostics route")
             )
             val json = runCatching { JSONObject(body) }.getOrNull()
             if (code !in 200..299 || json == null) return@runCatching listOf(
-                BackendDiagnosticComponent("backend_diagnostics", "failed", json?.optString("error") ?: "Diagnostic request failed with HTTP $code", "Check the backend deployment and SMS Bridge token")
+                BackendDiagnosticComponent("backend_diagnostics", "failed", json?.optString("code", "DIAGNOSTICS_HTTP_$code"), json?.optString("error") ?: "Diagnostic request failed with HTTP $code", "Check the backend deployment and SMS Bridge token", json?.optString("diagnosticId")?.takeIf { it.isNotBlank() })
             )
+            val diagnosticId = json.optString("diagnosticId").takeIf { it.isNotBlank() }
             val array = json.optJSONArray("components") ?: return@runCatching emptyList()
             (0 until array.length()).map { index ->
                 val value = array.getJSONObject(index)
                 BackendDiagnosticComponent(
                     key = value.optString("key", "component_$index"),
                     status = value.optString("status", "unknown"),
+                    code = value.optString("code", "DIAGNOSTIC_CODE_MISSING"),
                     detail = value.optString("detail", "No detail supplied"),
-                    suggestion = value.optString("suggestion").takeIf { it.isNotBlank() }
+                    suggestion = value.optString("suggestion").takeIf { it.isNotBlank() },
+                    diagnosticId = diagnosticId
                 )
             }
         }.getOrElse {
-            listOf(BackendDiagnosticComponent("backend_diagnostics", "failed", safeFailure(it), "Check internet access and backend availability"))
+            listOf(BackendDiagnosticComponent("backend_diagnostics", "failed", "DIAGNOSTICS_CONNECTION_FAILED", safeFailure(it), "Check internet access and backend availability"))
         }
     }
 
