@@ -58,13 +58,18 @@ object TransactionSyncCoordinator {
             "rejected", "validation_error" -> "REJECTED"
             else -> "FAILED"
         }
-        val message = result.message ?: when (localStatus) {
+        val baseMessage = result.message ?: when (localStatus) {
             "SYNCED" -> "Stored on server"
             "DUPLICATE" -> "Already stored on server"
             "EXCLUDED" -> "Excluded payer"
             "REJECTED" -> "Server rejected this transaction"
             else -> "Upload failed${result.httpCode?.let { " (HTTP $it)" }.orEmpty()}"
         }
+        val diagnosticSuffix = listOfNotNull(
+            result.errorCode?.let { "Code $it" },
+            result.traceId?.let { "Ref $it" }
+        ).joinToString(" · ")
+        val message = if (diagnosticSuffix.isBlank()) baseMessage else "$baseMessage · $diagnosticSuffix"
         dao.updateUploadResult(latest.uniqueLocalId, localStatus, message, result.serverTransactionId, result.httpCode)
         Graph.transactionEvents.tryEmit(Unit)
         TransactionSyncOutcome(
