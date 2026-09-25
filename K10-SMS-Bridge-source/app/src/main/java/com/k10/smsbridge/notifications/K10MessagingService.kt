@@ -13,6 +13,7 @@ import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
 import com.k10.smsbridge.Graph
 import com.k10.smsbridge.MainActivity
+import com.k10.smsbridge.diagnostics.DiagnosticEventLog
 import com.k10.smsbridge.mobile.MobileApi
 import com.k10.smsbridge.mobile.DeviceRegistrationStatus
 import kotlinx.coroutines.CoroutineScope
@@ -39,6 +40,7 @@ class K10MessagingService : FirebaseMessagingService() {
     override fun onMessageReceived(message: RemoteMessage) {
         val data = message.data
         if (data["type"] == "diagnostic_probe") {
+            logAsync("INFO", "FCM_DIAGNOSTIC_PROBE_RECEIVED", "firebase", "Firebase diagnostic probe received", data["probeId"])
             acknowledge(data["probeId"] ?: message.messageId ?: return, "diagnostic_probe")
             return
         }
@@ -54,7 +56,11 @@ class K10MessagingService : FirebaseMessagingService() {
         // not include it, so retain transaction/request ids as rollout fallbacks.
         val deliveryId = data["deliveryId"] ?: data["requestId"] ?: data["transactionId"] ?: message.messageId ?: return
         val deliveries = getSharedPreferences("k10_pay_deliveries", Context.MODE_PRIVATE)
-        if (deliveries.contains(deliveryId)) return
+        if (deliveries.contains(deliveryId)) {
+            logAsync("INFO", "FCM_DUPLICATE_SUPPRESSED", "firebase", "Duplicate Firebase delivery was suppressed", deliveryId)
+            return
+        }
+        logAsync("INFO", if (approval) "FCM_APPROVAL_RECEIVED" else "FCM_TRANSACTION_RECEIVED", "firebase", if (approval) "Server-confirmed approval notification received" else "Server-confirmed transaction notification received${data["serverConfirmedAt"]?.let { " · committed $it" }.orEmpty()}", deliveryId)
         if (voiceEnabled) data["amount"]?.toDoubleOrNull()?.let { Graph.announcer.announceReceived((it * 100).roundToLong()) }
         if (alertEnabled) showNotification(data, approval, deliveryId)
         val now = System.currentTimeMillis()
@@ -65,6 +71,7 @@ class K10MessagingService : FirebaseMessagingService() {
         }
         editor.apply()
         Graph.transactionEvents.tryEmit(Unit)
+        logAsync("INFO", "DEVICE_ALERT_DELIVERED", "notification", "Sticky${if (voiceEnabled) " and voice" else ""} notification delivered from server confirmation", deliveryId)
         acknowledge(deliveryId, data["type"].orEmpty())
     }
 
@@ -73,6 +80,18 @@ class K10MessagingService : FirebaseMessagingService() {
             val deviceId = Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID) ?: "k10-unknown-device"
             CoroutineScope(Dispatchers.IO).launch {
                 runCatching { MobileApi.acknowledgeDelivery(session, deviceId, deliveryId, type) }
+                    .onSuccess { DiagnosticEventLog.info("FCM_ACK_SENT", "firebase", "Delivery acknowledgement sent to server", referenceId = deliveryId) }
+                    .onFailure { DiagnosticEventLog.warning("FCM_ACK_FAILED", "firebase", it.message ?: "Delivery acknowledgement failed", referenceId = deliveryId) }
+            }
+        }
+    }
+
+    private fun logAsync(level: String, code: String, stage: String, detail: String, referenceId: String?) {
+        CoroutineScope(Dispatchers.IO).launch {
+            when (level) {
+                "ERROR" -> DiagnosticEventLog.error(code, stage, detail, referenceId = referenceId)
+                "WARNING" -> DiagnosticEventLog.warning(code, stage, detail, referenceId = referenceId)
+                else -> DiagnosticEventLog.info(code, stage, detail, referenceId = referenceId)
             }
         }
     }
