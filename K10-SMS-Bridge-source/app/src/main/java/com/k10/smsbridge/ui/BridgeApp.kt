@@ -8,6 +8,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.animateContentSize
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -148,20 +149,37 @@ private fun SystemDiagnosticsScreen(vm: BridgeViewModel, back: () -> Unit) {
 
 @Composable
 private fun DiagnosticCard(check: SystemDiagnostic) {
+    val expandable = check.key == "device_registration"
+    var expanded by remember(check.key, check.detail, check.code) { mutableStateOf(!expandable) }
     val color = when (check.status.lowercase()) {
         "working", "active", "ok", "healthy" -> androidx.compose.ui.graphics.Color(0xFF3DA66A)
         "pending", "delayed", "warning" -> MaterialTheme.colorScheme.tertiary
         "failed", "error" -> MaterialTheme.colorScheme.error
         else -> MaterialTheme.colorScheme.onSurfaceVariant
     }
-    Card(Modifier.fillMaxWidth().padding(top = 8.dp)) {
+    Card(
+        Modifier
+            .fillMaxWidth()
+            .padding(top = 8.dp)
+            .animateContentSize()
+            .then(if (expandable) Modifier.clickable { expanded = !expanded } else Modifier)
+    ) {
         Column(Modifier.padding(14.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text(check.title, Modifier.weight(1f), fontWeight = FontWeight.Bold)
                 Text(check.status.replace('_', ' ').uppercase(), color = color, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
             }
-            Text(check.detail, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 4.dp))
-            check.suggestion?.let { Text("Suggested: $it", color = color, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 6.dp)) }
+            if (expandable && !expanded) {
+                Text("Tap to view registered, inactive and Developer bridge devices", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 4.dp))
+            } else {
+                Text(check.detail, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 4.dp))
+                Text("Diagnostic code: ${check.code}", color = color, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 5.dp))
+                check.diagnosticId?.let { reference ->
+                    Text("Diagnostic reference: $reference", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall)
+                }
+                check.suggestion?.let { Text("Suggested: $it", color = color, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 6.dp)) }
+                if (expandable) Text("Tap to hide details", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(top = 6.dp))
+            }
         }
     }
 }
