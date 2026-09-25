@@ -107,7 +107,7 @@ object BackendClient {
             )
             val json = runCatching { JSONObject(body) }.getOrNull()
             if (code !in 200..299 || json == null) return@runCatching listOf(
-                BackendDiagnosticComponent("backend_diagnostics", "failed", json?.optString("code", "DIAGNOSTICS_HTTP_$code"), json?.optString("error") ?: "Diagnostic request failed with HTTP $code", "Check the backend deployment and SMS Bridge token", json?.optString("diagnosticId")?.takeIf { it.isNotBlank() })
+                BackendDiagnosticComponent("backend_diagnostics", "failed", json?.optString("code", "DIAGNOSTICS_HTTP_$code") ?: "DIAGNOSTICS_HTTP_$code", json?.optString("error") ?: "Diagnostic request failed with HTTP $code", "Check the backend deployment and SMS Bridge token", json?.optString("diagnosticId")?.takeIf { it.isNotBlank() })
             )
             val diagnosticId = json.optString("diagnosticId").takeIf { it.isNotBlank() }
             val array = json.optJSONArray("components") ?: return@runCatching emptyList()
