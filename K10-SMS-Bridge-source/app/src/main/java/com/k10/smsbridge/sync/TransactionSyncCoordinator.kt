@@ -6,6 +6,8 @@ import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.OutOfQuotaPolicy
+import androidx.work.Operation
+import androidx.work.await
 import androidx.work.WorkManager
 import androidx.work.workDataOf
 import com.k10.smsbridge.Graph
@@ -111,22 +113,25 @@ object TransactionSyncCoordinator {
         return pending.map { uploadOne(it) }
     }
 
-    fun enqueueRecovery(context: Context, expedited: Boolean = true, transactionLocalId: String? = null) {
+    fun enqueueRecovery(context: Context, expedited: Boolean = true, transactionLocalId: String? = null): Operation {
         val builder = OneTimeWorkRequestBuilder<SyncWorker>()
             .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
         if (!transactionLocalId.isNullOrBlank()) {
             builder.setInputData(workDataOf(SyncWorker.KEY_TRANSACTION_LOCAL_ID to transactionLocalId))
         }
+        // Keep a durable backup delayed briefly so the SMS receiver gets the
+        // first network attempt without racing its own WorkManager worker.
+        if (!expedited && transactionLocalId != null) builder.setInitialDelay(10, TimeUnit.SECONDS)
         if (expedited) builder.setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
 
         val workManager = WorkManager.getInstance(context)
         val isTransactionUpload = !transactionLocalId.isNullOrBlank()
         val workName = if (isTransactionUpload) {
-            "${SyncWorker.IMMEDIATE_NAME}-$transactionLocalId"
+            "${SyncWorker.IMMEDIATE_NAME}-$transactionLocalId-${if (expedited) "urgent" else "backup"}"
         } else {
             SyncWorker.IMMEDIATE_NAME
         }
-        workManager.enqueueUniqueWork(
+        val operation = workManager.enqueueUniqueWork(
             workName,
             if (isTransactionUpload) ExistingWorkPolicy.KEEP else ExistingWorkPolicy.REPLACE,
             builder.build()
@@ -137,7 +142,9 @@ object TransactionSyncCoordinator {
             } else {
                 if (expedited) "Expedited recovery upload queued" else "Recovery upload queued"
             }
-            DiagnosticEventLog.info("UPLOAD_WORK_ENQUEUED", "work", queueMessage, transactionLocalId)
+            runCatching { operation.await() }
+                .onSuccess { DiagnosticEventLog.info("UPLOAD_WORK_PERSISTED", "work", queueMessage, transactionLocalId) }
+                .onFailure { DiagnosticEventLog.error("UPLOAD_WORK_ENQUEUE_FAILED", "work", it.message ?: it::class.java.simpleName, transactionLocalId) }
         }
 
         // WorkManager's built-in retry backoff starts at ten minutes. Keep a
@@ -152,5 +159,6 @@ object TransactionSyncCoordinator {
             ExistingWorkPolicy.KEEP,
             recovery
         )
+        return operation
     }
 }
