@@ -18,9 +18,16 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
         val interactive = inputData.getBoolean(KEY_INTERACTIVE, false)
         val fullHistory = inputData.getBoolean(KEY_FULL_HISTORY, false)
         val recheckAll = inputData.getBoolean(KEY_RECHECK_ALL, false)
+        val transactionLocalId = inputData.getString(KEY_TRANSACTION_LOCAL_ID)?.takeIf { it.isNotBlank() }
         val dao = Graph.database.transactions()
         val rules = Graph.rules.current()
-        val scanned = SmsInboxCatchUp.importMissed(applicationContext, rules, dao, fullHistory)
+        // A live SMS already passed parsing and was saved by SmsReceiver. Its expedited
+        // worker must upload that row directly instead of performing a second inbox scan.
+        val scanned = if (transactionLocalId == null) {
+            SmsInboxCatchUp.importMissed(applicationContext, rules, dao, fullHistory)
+        } else {
+            0
+        }
         if (scanned > 0) DiagnosticEventLog.warning("SMS_RECOVERY_FOUND", "sms_recovery", "$scanned missed transaction(s) recovered from SMS inbox")
         if (settings.backendUrl.isBlank()) {
             return configuredFailure(interactive, scanned, "Backend URL is not configured")
@@ -49,8 +56,24 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
         var synced = 0
         var duplicates = 0
         var excluded = 0
-        val pending = dao.pending()
-        DiagnosticEventLog.info("UPLOAD_QUEUE_PROCESSING", "work", "Processing ${pending.size} pending transaction(s)")
+        val pending = if (transactionLocalId == null) {
+            dao.pending()
+        } else {
+            listOfNotNull(
+                dao.findByLocalId(transactionLocalId)
+                    ?.takeIf { it.syncStatus in setOf("PENDING", "FAILED", "UPLOADING") }
+            )
+        }
+        DiagnosticEventLog.info(
+            "UPLOAD_QUEUE_PROCESSING",
+            "work",
+            if (transactionLocalId == null) {
+                "Processing ${pending.size} pending transaction(s)"
+            } else {
+                "Processing independent live-SMS upload"
+            },
+            transactionLocalId
+        )
         pending.forEach { item ->
             val outcome = TransactionSyncCoordinator.uploadOne(item)
             when (outcome.status) {
@@ -106,6 +129,7 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
         const val KEY_INTERACTIVE = "interactive"
         const val KEY_FULL_HISTORY = "full_history"
         const val KEY_RECHECK_ALL = "recheck_all"
+        const val KEY_TRANSACTION_LOCAL_ID = "transaction_local_id"
         const val OUTPUT_SCANNED = "scanned"
         const val OUTPUT_ATTEMPTED = "attempted"
         const val OUTPUT_SYNCED = "synced"
