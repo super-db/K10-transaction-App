@@ -14,6 +14,7 @@ import com.k10.smsbridge.diagnostics.DiagnosticEventLog
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 
 data class TransactionSyncOutcome(
@@ -26,9 +27,11 @@ data class TransactionSyncOutcome(
 
 /** One upload path shared by SMS reception, manual recovery and WorkManager retries. */
 object TransactionSyncCoordinator {
-    private val mutex = Mutex()
+    // Network I/O for an older row must not hold up the SMS receiver's short wake window.
+    private val transactionLocks = ConcurrentHashMap<String, Mutex>()
 
-    suspend fun uploadOne(item: TransactionEntity, fastAttempt: Boolean = false): TransactionSyncOutcome = mutex.withLock {
+    suspend fun uploadOne(item: TransactionEntity, fastAttempt: Boolean = false): TransactionSyncOutcome =
+        transactionLocks.getOrPut(item.uniqueLocalId) { Mutex() }.withLock {
         val dao = Graph.database.transactions()
         val latest = dao.findByLocalId(item.uniqueLocalId) ?: item
         if (latest.syncStatus in setOf("SYNCED", "DUPLICATE", "EXCLUDED")) {
