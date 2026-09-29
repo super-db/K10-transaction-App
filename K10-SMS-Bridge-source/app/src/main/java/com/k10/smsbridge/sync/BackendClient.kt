@@ -77,8 +77,10 @@ object BackendClient {
             "POST",
             token,
             payload.toString(),
-            connectTimeout = if (fastAttempt) 5_000 else 15_000,
-            readTimeout = if (fastAttempt) 7_000 else 20_000
+            // BroadcastReceiver.goAsync() has a short execution window. Keep the
+            // live-SMS attempt below it; WorkManager retains the longer retry path.
+            connectTimeout = if (fastAttempt) 2_500 else 15_000,
+            readTimeout = if (fastAttempt) 4_500 else 20_000
         )
         val response = runCatching { JSONObject(body) }.getOrNull()
         val message = response?.optString("message")?.takeIf { it.isNotBlank() }
