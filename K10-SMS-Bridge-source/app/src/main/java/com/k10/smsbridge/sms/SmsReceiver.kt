@@ -24,15 +24,51 @@ class SmsReceiver : BroadcastReceiver() {
                     val received = parts.minOfOrNull { it.timestampMillis } ?: System.currentTimeMillis()
                     SmsParser.parse(sender, body, received, Graph.rules.current()).transaction?.let {
                         val entity = it.toEntity()
-                        if (Graph.database.transactions().insert(entity) != -1L) {
+                        val dao = Graph.database.transactions()
+                        val inserted = dao.insert(entity) != -1L
+                        val stored = if (inserted) entity else dao.findDuplicate(entity.duplicateKey)
+                        if (inserted) {
                             DiagnosticEventLog.info("TX_LOCAL_SAVED", "local", "Eligible transaction saved locally from live SMS", entity.uniqueLocalId)
                             Graph.transactionEvents.tryEmit(Unit)
-                            // Queue durable work before leaving the broadcast. Payment alerts are
-                            // deliberately server-confirmed and are delivered later through FCM.
-                            TransactionSyncCoordinator.enqueueRecovery(context, expedited = true, transactionLocalId = entity.uniqueLocalId)
                         } else {
-                            DiagnosticEventLog.info("TX_LOCAL_DUPLICATE", "local", "Eligible SMS was already stored locally", entity.uniqueLocalId)
+                            DiagnosticEventLog.info("TX_LOCAL_DUPLICATE", "local", "Eligible SMS was already stored locally", stored?.uniqueLocalId)
                         }
+
+                        stored
+                            ?.takeIf { transaction -> transaction.syncStatus !in setOf("SYNCED", "DUPLICATE", "EXCLUDED") }
+                            ?.let { transaction ->
+                                // First persist an independent WorkManager retry. Then use the SMS
+                                // broadcast's short protected wake window for an immediate upload.
+                                // This bypasses Samsung JobScheduler deferral while preserving a
+                                // durable retry if the network call cannot finish.
+                                TransactionSyncCoordinator.enqueueRecovery(
+                                    context,
+                                    expedited = true,
+                                    transactionLocalId = transaction.uniqueLocalId
+                                )
+                                DiagnosticEventLog.info(
+                                    "RECEIVER_UPLOAD_STARTED",
+                                    "sms_wake",
+                                    "Immediate server upload started inside the SMS wake window",
+                                    transaction.uniqueLocalId
+                                )
+                                val outcome = TransactionSyncCoordinator.uploadOne(transaction, fastAttempt = true)
+                                if (outcome.confirmedOnServer) {
+                                    DiagnosticEventLog.info(
+                                        "RECEIVER_UPLOAD_CONFIRMED",
+                                        "sms_wake",
+                                        "SMS wake-window upload confirmed by server",
+                                        transaction.uniqueLocalId
+                                    )
+                                } else {
+                                    DiagnosticEventLog.warning(
+                                        "RECEIVER_UPLOAD_DEFERRED",
+                                        "sms_wake",
+                                        outcome.message ?: "Immediate upload did not finish; durable retry remains queued",
+                                        transaction.uniqueLocalId
+                                    )
+                                }
+                            }
                     }
                 }
             } catch (error: Throwable) {
