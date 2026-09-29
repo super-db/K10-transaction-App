@@ -38,7 +38,7 @@ class MainActivity : ComponentActivity() {
         val request = OneTimeWorkRequestBuilder<SyncWorker>()
             .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
             .build()
-        WorkManager.getInstance(this).enqueueUniqueWork(SyncWorker.IMMEDIATE_NAME, ExistingWorkPolicy.APPEND_OR_REPLACE, request)
+        WorkManager.getInstance(this).enqueueUniqueWork(SyncWorker.IMMEDIATE_NAME, ExistingWorkPolicy.REPLACE, request)
     }
 }
 

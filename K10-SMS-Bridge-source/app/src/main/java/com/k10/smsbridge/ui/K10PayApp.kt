@@ -1,6 +1,11 @@
 package com.k10.smsbridge.ui
 
 import android.Manifest
+import android.app.ActivityManager
+import android.content.Intent
+import android.net.Uri
+import android.os.PowerManager
+import android.provider.Settings
 import android.content.pm.PackageManager
 import android.os.Build
 import androidx.activity.compose.BackHandler
@@ -63,13 +68,14 @@ fun K10PayApp(darkMode:Boolean,themeMode:ThemeMode,onThemeModeChange:(ThemeMode)
     AnimatedContent(targetState=screen,transitionSpec={fadeIn(tween(220))+slideInHorizontally{it/8} togetherWith fadeOut(tween(160))},label="screen"){destination->
         when(destination){
             "diagnostics"->BridgeApp(initialScreen="diagnostics",exit={screen="settings"})
+            "background_setup"->BackgroundSetupScreen({screen="settings"},{screen="diagnostics"})
             "bridge_search"->BridgeApp(initialScreen="search",exit={screen="settings"})
             "exclusions"->ExclusionsScreen(vm){screen="settings"}
             "passwords"->ManagePasswordsScreen(vm){screen="settings"}
             "roles"->StaffAccessScreen(vm){screen="settings"}
             "approvals"->ApprovalScreen(vm){screen="home"}
-            "settings"->SettingsScreen(vm,themeMode,onThemeModeChange,{screen="home"},{screen="diagnostics"},{screen="bridge_search"},{vm.loadExclusions();screen="exclusions"},{if(vm.session?.developer==true)vm.refreshApprovals(false);screen="passwords"},{vm.refreshApprovals(false);screen="roles"})
-            else->{LaunchedEffect(Unit){vm.refresh()};MobileHome(vm,{screen="approvals"},{screen="settings"})}
+            "settings"->SettingsScreen(vm,themeMode,onThemeModeChange,{screen="home"},{screen="diagnostics"},{screen="bridge_search"},{screen="background_setup"},{vm.loadExclusions();screen="exclusions"},{if(vm.session?.developer==true)vm.refreshApprovals(false);screen="passwords"},{vm.refreshApprovals(false);screen="roles"})
+            else->{LaunchedEffect(Unit){vm.refresh()};MobileHome(vm,{screen="approvals"},{screen="settings"},{screen="background_setup"})}
         }
     }
 }
@@ -105,12 +111,26 @@ private fun AuthScreen(vm:MobileViewModel,dark:Boolean,toggle:()->Unit){
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun MobileHome(vm:MobileViewModel,openApprovals:()->Unit,openSettings:()->Unit){
+private fun MobileHome(vm:MobileViewModel,openApprovals:()->Unit,openSettings:()->Unit,openBackgroundSetup:()->Unit){
+    val context=androidx.compose.ui.platform.LocalContext.current
     val session=vm.session?:return
     var selected by remember{mutableStateOf<MobileTransaction?>(null)}
     Scaffold(topBar={Surface(shadowElevation=2.dp){Row(Modifier.fillMaxWidth().statusBarsPadding().padding(horizontal=16.dp,vertical=12.dp),verticalAlignment=Alignment.CenterVertically){Column(Modifier.weight(1f)){K10Wordmark(MaterialTheme.typography.headlineMedium);Text("${session.displayName} · ${roleName(session.role)}",color=MaterialTheme.colorScheme.onSurfaceVariant)};FilledTonalIconButton(vm::reconcileAll,enabled=!vm.reconcilingTransactions){if(vm.reconcilingTransactions)CircularProgressIndicator(Modifier.size(20.dp),strokeWidth=2.dp)else Icon(Icons.Rounded.Refresh,"Scan and sync transactions",tint=MaterialTheme.colorScheme.primary)};if(session.developer)BadgedBox(badge={if(vm.pendingApprovals>0)Badge{Text(vm.pendingApprovals.coerceAtMost(99).toString())}}){FilledTonalIconButton(openApprovals){Icon(Icons.Rounded.Notifications,"Approval notifications",tint=MaterialTheme.colorScheme.primary)}};IconButton(openSettings){Icon(Icons.Rounded.Settings,"Settings")}}}}){padding->
         PullToRefreshBox(isRefreshing=vm.loadingTransactions||vm.reconcilingTransactions,onRefresh=vm::reconcileAll,modifier=Modifier.fillMaxSize().padding(padding)){
             LazyColumn(Modifier.fillMaxSize().padding(horizontal=16.dp),contentPadding=PaddingValues(vertical=16.dp),verticalArrangement=Arrangement.spacedBy(12.dp)){
+                if(session.developer && ContextCompat.checkSelfPermission(
+                    context,
+                    Manifest.permission.RECEIVE_SMS
+                ) != PackageManager.PERMISSION_GRANTED) {
+                    item {
+                        Card(onClick=openBackgroundSetup,modifier=Modifier.fillMaxWidth()) {
+                            Column(Modifier.padding(16.dp)) {
+                                Text("Live SMS access is off",fontWeight=FontWeight.Bold,color=MaterialTheme.colorScheme.error)
+                                Text("Existing-message scans can work without live SMS delivery. Tap to enable automatic collection.")
+                            }
+                        }
+                    }
+                }
                 item{AnimatedSummaryCard(vm.todayAmount,vm.todayCount)}
                 item{Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(6.dp)){Range("Today",true,vm.range=="today",Modifier.weight(1f)){vm.load("today")};Range("15d",session.has("finance.slice.history15"),vm.range=="15d",Modifier.weight(1f)){vm.load("15d")};Range("30d",session.has("finance.slice.history30"),vm.range=="30d",Modifier.weight(1f)){vm.load("30d")};Range("All",session.has("finance.slice.historyLifetime"),vm.range=="all",Modifier.weight(1f)){vm.load("all")}}}
                 item{Text("Recent transactions",style=MaterialTheme.typography.titleLarge,fontWeight=FontWeight.Bold)}
@@ -156,7 +176,7 @@ private fun MobileHome(vm:MobileViewModel,openApprovals:()->Unit,openSettings:()
 }
 
 @Composable
-private fun SettingsScreen(vm:MobileViewModel,themeMode:ThemeMode,onThemeModeChange:(ThemeMode)->Unit,back:()->Unit,bridge:()->Unit,scanSms:()->Unit,exclusions:()->Unit,passwords:()->Unit,roles:()->Unit){
+private fun SettingsScreen(vm:MobileViewModel,themeMode:ThemeMode,onThemeModeChange:(ThemeMode)->Unit,back:()->Unit,bridge:()->Unit,scanSms:()->Unit,backgroundSetup:()->Unit,exclusions:()->Unit,passwords:()->Unit,roles:()->Unit){
     val session=vm.session?:return
     val preferences=session.notificationPreferences
     Scaffold(topBar={AppBar("Settings",back)}){padding->
@@ -181,6 +201,7 @@ private fun SettingsScreen(vm:MobileViewModel,themeMode:ThemeMode,onThemeModeCha
                 Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(6.dp)){ThemeMode.values().forEach{mode->FilterChip(selected=themeMode==mode,onClick={onThemeModeChange(mode)},label={Text(mode.name.lowercase().replaceFirstChar(Char::uppercase))},modifier=Modifier.weight(1f))}}
             }}
             if(session.developer)item{SettingsCard("Transaction collection","Rules remain strict for destination account xx7972."){
+                SettingsAction("Live SMS & background setup",detail="Check SMS permission and phone battery restrictions",onClick=backgroundSetup)
                 SettingsAction("Excluded payer names",onClick=exclusions)
                 SettingsAction("Scan existing SMS",detail="Recover older messages only",onClick=scanSms)
                 SettingsAction("System diagnostics",detail="Audit SMS, upload, D1 and staff notifications",onClick=bridge)
@@ -189,6 +210,58 @@ private fun SettingsScreen(vm:MobileViewModel,themeMode:ThemeMode,onThemeModeCha
                 vm.availableUpdate?.let{Text("Version ${it.latestVersionName} is available",fontWeight=FontWeight.Bold);Button(vm::downloadUpdate,enabled=!vm.busy,modifier=Modifier.fillMaxWidth().padding(top=8.dp)){Text(if(vm.busy)"Downloading…" else "Download & install")}}?:OutlinedButton({vm.checkForUpdate()},enabled=!vm.busy,modifier=Modifier.fillMaxWidth()){Text("Check for updates")}
             }}
             if(vm.message.isNotBlank())item{Message(vm)}
+        }
+    }
+}
+
+@Composable
+private fun BackgroundSetupScreen(back:()->Unit,diagnostics:()->Unit){
+    val context=androidx.compose.ui.platform.LocalContext.current
+    var refresh by remember{mutableIntStateOf(0)}
+    val smsPermission=rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()){refresh++}
+    val settingsLauncher=rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()){refresh++}
+    val lifecycleOwner=LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner){
+        val observer=LifecycleEventObserver{_,event->if(event==Lifecycle.Event.ON_RESUME)refresh++}
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose{lifecycleOwner.lifecycle.removeObserver(observer)}
+    }
+    val receive=remember(refresh){ContextCompat.checkSelfPermission(context,Manifest.permission.RECEIVE_SMS)==PackageManager.PERMISSION_GRANTED}
+    val read=remember(refresh){ContextCompat.checkSelfPermission(context,Manifest.permission.READ_SMS)==PackageManager.PERMISSION_GRANTED}
+    val power=context.getSystemService(PowerManager::class.java)
+    val batteryExempt=remember(refresh){power?.isIgnoringBatteryOptimizations(context.packageName)==true}
+    val activityManager=context.getSystemService(ActivityManager::class.java)
+    val backgroundRestricted=remember(refresh){Build.VERSION.SDK_INT>=28&&activityManager?.isBackgroundRestricted==true}
+    fun openAppSettings(){
+        settingsLauncher.launch(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,Uri.parse("package:${context.packageName}")))
+    }
+    Scaffold(topBar={AppBar("Background collection",back)}){padding->
+        LazyColumn(Modifier.fillMaxSize().padding(padding),contentPadding=PaddingValues(16.dp),verticalArrangement=Arrangement.spacedBy(14.dp)){
+            item{SettingsCard("Live SMS delivery","A scan of existing messages uses READ SMS. Receiving a new SMS in the background separately requires RECEIVE SMS."){
+                SettingsValue("Receive new SMS",if(receive)"Allowed" else "Not allowed")
+                SettingsValue("Scan existing SMS",if(read)"Allowed" else "Not allowed")
+                if(!receive||!read)Button(
+                    {smsPermission.launch(arrayOf(Manifest.permission.RECEIVE_SMS,Manifest.permission.READ_SMS))},
+                    modifier=Modifier.fillMaxWidth()
+                ){Text("Allow SMS access")}
+                Text("If Android no longer shows the permission prompt, open App info → Permissions → SMS.",
+                    color=MaterialTheme.colorScheme.onSurfaceVariant,style=MaterialTheme.typography.bodySmall)
+            }}
+            item{SettingsCard("Background operation","Android has no single background permission. These phone settings determine whether queued uploads may run while K10 Pay is closed."){
+                SettingsValue("Battery optimization",if(batteryExempt)"Exempt" else "Optimized")
+                SettingsValue("Background restriction",if(backgroundRestricted)"Restricted" else "No OS restriction reported")
+                if(!batteryExempt)OutlinedButton({
+                    val intent=Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                        Uri.parse("package:${context.packageName}"))
+                    try{settingsLauncher.launch(intent)}catch(_:Exception){openAppSettings()}
+                },modifier=Modifier.fillMaxWidth()){Text("Allow background uploads")}
+                OutlinedButton(::openAppSettings,modifier=Modifier.fillMaxWidth()){Text("Open K10 Pay app settings")}
+                Text("On Samsung, also set Battery to Unrestricted and remove K10 Pay from Sleeping / Deep sleeping apps. Battery exemption here does not confirm the Samsung sleep-list state.",
+                    color=MaterialTheme.colorScheme.onSurfaceVariant,style=MaterialTheme.typography.bodySmall)
+            }}
+            item{SettingsCard("Verify one real payment","After setup, leave K10 Pay closed and receive a genuine eligible Slice SMS. Open Diagnostics afterward to see whether Android delivered it and whether the server confirmed it."){
+                SettingsAction("Open diagnostic log report",onClick=diagnostics)
+            }}
         }
     }
 }

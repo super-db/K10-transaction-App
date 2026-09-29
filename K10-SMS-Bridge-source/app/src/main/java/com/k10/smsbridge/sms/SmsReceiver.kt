@@ -4,6 +4,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.provider.Telephony
+import androidx.work.await
 import com.k10.smsbridge.Graph
 import com.k10.smsbridge.data.toEntity
 import com.k10.smsbridge.diagnostics.DiagnosticEventLog
@@ -13,16 +14,23 @@ import kotlinx.coroutines.launch
 class SmsReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action != Telephony.Sms.Intents.SMS_RECEIVED_ACTION) return
-        if (!Graph.rules.settings().serviceEnabled) return
         val pendingResult = goAsync()
         Graph.appScope.launch {
             try {
                 DiagnosticEventLog.info("SMS_BROADCAST_RECEIVED", "sms", "Android delivered an incoming SMS broadcast")
+                if (!Graph.rules.settings().serviceEnabled) {
+                    DiagnosticEventLog.warning("SMS_SERVICE_DISABLED", "sms", "SMS broadcast received but transaction collection is disabled")
+                    return@launch
+                }
                 val messages = Telephony.Sms.Intents.getMessagesFromIntent(intent)
                 messages.groupBy { it.originatingAddress.orEmpty() }.forEach { (sender, parts) ->
                     val body = parts.joinToString("") { it.messageBody.orEmpty() }
                     val received = parts.minOfOrNull { it.timestampMillis } ?: System.currentTimeMillis()
-                    SmsParser.parse(sender, body, received, Graph.rules.current()).transaction?.let {
+                    val parsed = SmsParser.parse(sender, body, received, Graph.rules.current())
+                    if (parsed.transaction == null && body.contains(Graph.rules.current().accountLast4)) {
+                        DiagnosticEventLog.warning("SMS_CANDIDATE_REJECTED", "sms", parsed.reason)
+                    }
+                    parsed.transaction?.let {
                         val entity = it.toEntity()
                         val dao = Graph.database.transactions()
                         val inserted = dao.insert(entity) != -1L
@@ -41,11 +49,20 @@ class SmsReceiver : BroadcastReceiver() {
                                 // broadcast's short protected wake window for an immediate upload.
                                 // This bypasses Samsung JobScheduler deferral while preserving a
                                 // durable retry if the network call cannot finish.
-                                TransactionSyncCoordinator.enqueueRecovery(
-                                    context,
-                                    expedited = true,
-                                    transactionLocalId = transaction.uniqueLocalId
-                                )
+                                runCatching {
+                                    TransactionSyncCoordinator.enqueueRecovery(
+                                        context,
+                                        expedited = false,
+                                        transactionLocalId = transaction.uniqueLocalId
+                                    ).await()
+                                }.onFailure { failure ->
+                                    DiagnosticEventLog.error(
+                                        "RECEIVER_BACKUP_ENQUEUE_FAILED",
+                                        "sms_wake",
+                                        failure.message ?: failure::class.java.simpleName,
+                                        transaction.uniqueLocalId
+                                    )
+                                }
                                 DiagnosticEventLog.info(
                                     "RECEIVER_UPLOAD_STARTED",
                                     "sms_wake",
@@ -66,6 +83,11 @@ class SmsReceiver : BroadcastReceiver() {
                                         "sms_wake",
                                         outcome.message ?: "Immediate upload did not finish; durable retry remains queued",
                                         transaction.uniqueLocalId
+                                    )
+                                    TransactionSyncCoordinator.enqueueRecovery(
+                                        context,
+                                        expedited = true,
+                                        transactionLocalId = transaction.uniqueLocalId
                                     )
                                 }
                             }

@@ -37,8 +37,12 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
             return configuredFailure(interactive, scanned, "API token is not configured")
         }
 
-        runCatching { BackendClient.fetchRules(settings.backendUrl, token) }
-            .onSuccess { Graph.rules.applyRemote(it) }
+        // Live SMS has already been validated against the last known good rules.
+        // Do not delay its server POST behind a separate rules network request.
+        if (transactionLocalId == null) {
+            runCatching { BackendClient.fetchRules(settings.backendUrl, token) }
+                .onSuccess { Graph.rules.applyRemote(it) }
+        }
 
         if (recheckAll) {
             val excluded = rules.excludedPayerNames.map { normalizePayer(it) }.toSet()

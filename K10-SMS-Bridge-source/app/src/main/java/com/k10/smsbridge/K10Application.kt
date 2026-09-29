@@ -36,7 +36,12 @@ class K10Application : Application() {
         WorkManager.getInstance(this).enqueueUniqueWork(
             SyncWorker.STARTUP_NAME,
             ExistingWorkPolicy.REPLACE,
-            OneTimeWorkRequestBuilder<SyncWorker>().setConstraints(constraints).build()
+            // A cold process may have been started by an SMS. Give its receiver
+            // the first short upload attempt before startup inbox recovery begins.
+            OneTimeWorkRequestBuilder<SyncWorker>()
+                .setConstraints(constraints)
+                .setInitialDelay(12, TimeUnit.SECONDS)
+                .build()
         )
     }
 }
