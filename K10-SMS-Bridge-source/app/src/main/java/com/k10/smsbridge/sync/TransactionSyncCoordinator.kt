@@ -7,6 +7,7 @@ import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.OutOfQuotaPolicy
 import androidx.work.WorkManager
+import androidx.work.workDataOf
 import com.k10.smsbridge.Graph
 import com.k10.smsbridge.data.TransactionEntity
 import com.k10.smsbridge.diagnostics.DiagnosticEventLog
@@ -110,15 +111,30 @@ object TransactionSyncCoordinator {
     fun enqueueRecovery(context: Context, expedited: Boolean = true, transactionLocalId: String? = null) {
         val builder = OneTimeWorkRequestBuilder<SyncWorker>()
             .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
+        if (!transactionLocalId.isNullOrBlank()) {
+            builder.setInputData(workDataOf(SyncWorker.KEY_TRANSACTION_LOCAL_ID to transactionLocalId))
+        }
         if (expedited) builder.setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
+
         val workManager = WorkManager.getInstance(context)
+        val isTransactionUpload = !transactionLocalId.isNullOrBlank()
+        val workName = if (isTransactionUpload) {
+            "${SyncWorker.IMMEDIATE_NAME}-$transactionLocalId"
+        } else {
+            SyncWorker.IMMEDIATE_NAME
+        }
         workManager.enqueueUniqueWork(
-            SyncWorker.IMMEDIATE_NAME,
-            ExistingWorkPolicy.APPEND_OR_REPLACE,
+            workName,
+            if (isTransactionUpload) ExistingWorkPolicy.KEEP else ExistingWorkPolicy.REPLACE,
             builder.build()
         )
         Graph.appScope.launch {
-            DiagnosticEventLog.info("UPLOAD_WORK_ENQUEUED", "work", if (expedited) "Expedited upload work queued" else "Upload work queued", transactionLocalId)
+            val queueMessage = if (isTransactionUpload) {
+                if (expedited) "Independent expedited transaction upload queued" else "Independent transaction upload queued"
+            } else {
+                if (expedited) "Expedited recovery upload queued" else "Recovery upload queued"
+            }
+            DiagnosticEventLog.info("UPLOAD_WORK_ENQUEUED", "work", queueMessage, transactionLocalId)
         }
 
         // WorkManager's built-in retry backoff starts at ten minutes. Keep a
