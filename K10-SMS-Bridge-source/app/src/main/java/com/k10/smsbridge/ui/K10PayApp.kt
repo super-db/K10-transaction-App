@@ -112,13 +112,14 @@ private fun AuthScreen(vm:MobileViewModel,dark:Boolean,toggle:()->Unit){
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun MobileHome(vm:MobileViewModel,openApprovals:()->Unit,openSettings:()->Unit,openBackgroundSetup:()->Unit){
+    val context=androidx.compose.ui.platform.LocalContext.current
     val session=vm.session?:return
     var selected by remember{mutableStateOf<MobileTransaction?>(null)}
     Scaffold(topBar={Surface(shadowElevation=2.dp){Row(Modifier.fillMaxWidth().statusBarsPadding().padding(horizontal=16.dp,vertical=12.dp),verticalAlignment=Alignment.CenterVertically){Column(Modifier.weight(1f)){K10Wordmark(MaterialTheme.typography.headlineMedium);Text("${session.displayName} · ${roleName(session.role)}",color=MaterialTheme.colorScheme.onSurfaceVariant)};FilledTonalIconButton(vm::reconcileAll,enabled=!vm.reconcilingTransactions){if(vm.reconcilingTransactions)CircularProgressIndicator(Modifier.size(20.dp),strokeWidth=2.dp)else Icon(Icons.Rounded.Refresh,"Scan and sync transactions",tint=MaterialTheme.colorScheme.primary)};if(session.developer)BadgedBox(badge={if(vm.pendingApprovals>0)Badge{Text(vm.pendingApprovals.coerceAtMost(99).toString())}}){FilledTonalIconButton(openApprovals){Icon(Icons.Rounded.Notifications,"Approval notifications",tint=MaterialTheme.colorScheme.primary)}};IconButton(openSettings){Icon(Icons.Rounded.Settings,"Settings")}}}}){padding->
         PullToRefreshBox(isRefreshing=vm.loadingTransactions||vm.reconcilingTransactions,onRefresh=vm::reconcileAll,modifier=Modifier.fillMaxSize().padding(padding)){
             LazyColumn(Modifier.fillMaxSize().padding(horizontal=16.dp),contentPadding=PaddingValues(vertical=16.dp),verticalArrangement=Arrangement.spacedBy(12.dp)){
                 if(session.developer && ContextCompat.checkSelfPermission(
-                    androidx.compose.ui.platform.LocalContext.current,
+                    context,
                     Manifest.permission.RECEIVE_SMS
                 ) != PackageManager.PERMISSION_GRANTED) {
                     item {
