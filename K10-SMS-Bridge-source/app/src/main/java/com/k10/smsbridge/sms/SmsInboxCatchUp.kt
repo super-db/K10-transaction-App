@@ -30,6 +30,7 @@ object SmsInboxCatchUp {
         onScanned: (Int) -> Unit = {}
     ): Int = withContext(Dispatchers.IO) {
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.READ_SMS) != PackageManager.PERMISSION_GRANTED) {
+            if(rangeFrom!=null)throw SecurityException("REFRESH_SMS_PERMISSION_REQUIRED")
             return@withContext 0
         }
 
@@ -66,11 +67,12 @@ object SmsInboxCatchUp {
                         DiagnosticEventLog.warning("TX_RECOVERED_FROM_INBOX", "sms_recovery", "Eligible transaction recovered from the SMS inbox", entity.uniqueLocalId)
                     }
                 }
-            }
+            } ?: run { if(rangeFrom!=null)error("REFRESH_SMS_PROVIDER_UNAVAILABLE") }
             if(rangeFrom==null)prefs.edit().putLong(LAST_SCAN, now).apply()
             onScanned(scanned)
         } catch (_: SecurityException) {
             DiagnosticEventLog.error("SMS_INBOX_PERMISSION_DENIED", "sms_recovery", "Android denied SMS inbox access")
+            if(rangeFrom!=null)throw SecurityException("REFRESH_SMS_ACCESS_DENIED")
             return@withContext 0
         }
         if (added > 0) Graph.transactionEvents.tryEmit(Unit)

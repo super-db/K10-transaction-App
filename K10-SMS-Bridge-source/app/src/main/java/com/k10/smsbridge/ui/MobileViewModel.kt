@@ -76,7 +76,7 @@ class MobileViewModel(app:Application):AndroidViewModel(app){
                 }
             }.onFailure{DiagnosticEventLog.error("LOCAL_METADATA_REPAIR_FAILED","sms_parse",it::class.java.simpleName)}
             OpeningDiagnostics.stage("Local metadata repair",SystemClock.elapsedRealtime()-started,"$repaired corrected; IDs and sync state preserved")
-            if(repaired>0)DiagnosticEventLog.info("IMPS_METADATA_REPAIRED","sms_parse","$repaired local records corrected without re-upload")
+            if(repaired>0)DiagnosticEventLog.info("BANK_SMS_METADATA_REPAIRED","sms_parse","$repaired local records corrected without re-upload")
         }
         session?.let{if(!it.passwordChangeRequired){startLocalObserver(it);load("today",false);refreshPreferences(false);registerDevice(it);if(it.developer){refreshApprovals(false);loadExclusions(false);loadStudents(false)}}}
         viewModelScope.launch{Graph.transactionEvents.collect{if(session?.passwordChangeRequired==false){rebuildTransactions();load(range,false,true)}}}
