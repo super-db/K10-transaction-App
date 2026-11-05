@@ -131,6 +131,28 @@ class SmsParserTest {
         assertEquals(null,SmsParser.recoverImpsMetadata(wrapped+" OTP 123456"))
     }
 
+    @Test fun suppliedUpiReferenceMessagesRecoverPayersAndKeepLegacyIdentity(){
+        for((name,ref) in listOf("RAJU MALLAH" to "834832324886","MANASH JYOTI MAHANTA" to "486954463096","AMULYA KUMAR HAZARIKA" to "667502572315")){
+            val body="Rs. 3,000 received in Slice bank account xx7972 on 05-Nov-26 from "+name+" (UPI Ref: "+ref+") - slice"
+            val tx=requireNotNull(SmsParser.parse("JD-SLCBNK-T",body,receivedAt,RuleConfig.DEFAULT).transaction)
+            assertEquals(name,tx.payerName);assertEquals("UPI",tx.paymentMethod)
+            val canonical=listOf("JD-SLCBNK-T",tx.amountMinor,"UNKNOWN PAYER",tx.accountLast4,tx.transactionDate,body.trim()).joinToString("|")
+            val legacy=java.security.MessageDigest.getInstance("SHA-256").digest(canonical.toByteArray()).joinToString(""){"%02x".format(it)}
+            assertEquals(legacy,tx.duplicateKey)
+            val wrapped=body.replace(" from "," FROM\n").replace(" (UPI","\n (upi")
+            assertEquals(name,SmsParser.recoverImpsMetadata(wrapped)?.payerName)
+            assertEquals(null,SmsParser.recoverImpsMetadata(body.replace("xx7972","xx5778")+" source account 7972"))
+            assertEquals(null,SmsParser.recoverImpsMetadata(body+" OTP 123456"))
+            assertTrue(SmsParser.parse("JD-SLCBNK-T",body,receivedAt,RuleConfig.DEFAULT.copy(excludedPayerNames=listOf(name))).transaction?.payerExcluded==true)
+        }
+    }
+    @Test fun structuralRecoveryRejectsAccountAsPayerAndAmbiguousSuffix(){
+        assertEquals(null,SmsParser.recoverImpsMetadata("Rs. 400 received in A/c 7972 from A/c 5778 (UPI Ref: 12345678)"))
+        assertEquals(null,SmsParser.recoverImpsMetadata("Rs. 400 received in A/c 7972 from SOMEONE with ambiguous details"))
+        val result=SmsParser.recoverImpsMetadata("Rs. 400 credited to account 7972 from O'NEIL & SONS via NEFT.")
+        assertEquals("O'NEIL & SONS",result?.payerName);assertEquals("NEFT",result?.paymentMethod)
+    }
+
     private fun assertRejected(body: String) {
         assertFalse(SmsParser.parse("SLICE", body, receivedAt, RuleConfig.DEFAULT).eligible)
     }

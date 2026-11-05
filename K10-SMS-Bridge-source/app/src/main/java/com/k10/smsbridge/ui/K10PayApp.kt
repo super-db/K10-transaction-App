@@ -115,7 +115,7 @@ private fun MobileHome(vm:MobileViewModel,openApprovals:()->Unit,openSettings:()
     val context=androidx.compose.ui.platform.LocalContext.current
     val session=vm.session?:return
     var selected by remember{mutableStateOf<MobileTransaction?>(null)}
-    Scaffold(topBar={Surface(shadowElevation=2.dp){Row(Modifier.fillMaxWidth().statusBarsPadding().padding(horizontal=16.dp,vertical=12.dp),verticalAlignment=Alignment.CenterVertically){Column(Modifier.weight(1f)){K10Wordmark(MaterialTheme.typography.headlineMedium);Text("${session.displayName} · ${roleName(session.role)}",color=MaterialTheme.colorScheme.onSurfaceVariant)};FilledTonalIconButton(vm::reconcileAll,enabled=!vm.reconcilingTransactions){if(vm.reconcilingTransactions)CircularProgressIndicator(Modifier.size(20.dp),strokeWidth=2.dp)else Icon(Icons.Rounded.Refresh,"Scan and sync transactions",tint=MaterialTheme.colorScheme.primary)};if(session.developer)BadgedBox(badge={if(vm.pendingApprovals>0)Badge{Text(vm.pendingApprovals.coerceAtMost(99).toString())}}){FilledTonalIconButton(openApprovals){Icon(Icons.Rounded.Notifications,"Approval notifications",tint=MaterialTheme.colorScheme.primary)}};IconButton(openSettings){Icon(Icons.Rounded.Settings,"Settings")}}}}){padding->
+    Scaffold(topBar={Surface(shadowElevation=2.dp){Row(Modifier.fillMaxWidth().statusBarsPadding().padding(horizontal=16.dp,vertical=12.dp),verticalAlignment=Alignment.CenterVertically){Column(Modifier.weight(1f)){K10Wordmark(MaterialTheme.typography.headlineMedium);Text("${session.displayName} · ${roleName(session.role)}",color=MaterialTheme.colorScheme.onSurfaceVariant)};FilledTonalIconButton(vm::reconcileAll){if(vm.reconcilingTransactions)CircularProgressIndicator(Modifier.size(20.dp),strokeWidth=2.dp)else Icon(Icons.Rounded.Refresh,"Scan and sync transactions",tint=MaterialTheme.colorScheme.primary)};if(session.developer)BadgedBox(badge={if(vm.pendingApprovals>0)Badge{Text(vm.pendingApprovals.coerceAtMost(99).toString())}}){FilledTonalIconButton(openApprovals){Icon(Icons.Rounded.Notifications,"Approval notifications",tint=MaterialTheme.colorScheme.primary)}};IconButton(openSettings){Icon(Icons.Rounded.Settings,"Settings")}}}}){padding->
         PullToRefreshBox(isRefreshing=vm.loadingTransactions||vm.reconcilingTransactions,onRefresh=vm::reconcileAll,modifier=Modifier.fillMaxSize().padding(padding)){
             LazyColumn(Modifier.fillMaxSize().padding(horizontal=16.dp),contentPadding=PaddingValues(vertical=16.dp),verticalArrangement=Arrangement.spacedBy(12.dp)){
                 if(session.developer && ContextCompat.checkSelfPermission(
@@ -147,6 +147,7 @@ private fun MobileHome(vm:MobileViewModel,openApprovals:()->Unit,openSettings:()
             }
         }
     }
+    RefreshProgressDialog(vm)
     selected?.let{tx->TransactionDetailDialog(tx,session.developer,vm,{selected=null}){studentId->vm.tagTransaction(tx.id,studentId);selected=null}}
 }
 
@@ -399,3 +400,25 @@ private fun roleName(value:String)=when(value){"developer"->"Developer";"transac
 private fun historyName(value:String)=when(value){"15d"->"Up to 15 days";"30d"->"Up to 30 days";"lifetime"->"Lifetime";else->"Today only"}
 private fun rangeName(value:String)=when(value){"15d"->"last 15 days";"30d"->"last 30 days";"all"->"lifetime";else->"today"}
 
+
+
+@Composable private fun RefreshProgressDialog(vm:MobileViewModel){
+    var confirmHide by remember{mutableStateOf(false)}
+    if(vm.showRefreshProgress){
+        AlertDialog(
+            onDismissRequest={},
+            title={Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically){
+                Text(if(vm.reconcilingTransactions)"Refreshing transactions" else if(vm.refreshFailed)"Refresh incomplete" else "Refresh complete",Modifier.weight(1f))
+                TextButton({if(vm.reconcilingTransactions)confirmHide=true else vm.hideRefreshProgress()}){Text("✕")}
+            }},
+            text={Column(verticalArrangement=Arrangement.spacedBy(12.dp)){
+                if(vm.reconcilingTransactions)LinearProgressIndicator(Modifier.fillMaxWidth())
+                Text(vm.reconciliationProgress)
+                if(vm.reconcilingTransactions)Text("You can leave the app. This refresh is saved and continues when Android and the network allow. New incoming payments use their own upload path.",style=MaterialTheme.typography.bodySmall)
+            }},
+            confirmButton={if(!vm.reconcilingTransactions)TextButton(vm::hideRefreshProgress){Text("Close")}},
+            dismissButton={if(!vm.reconcilingTransactions&&vm.refreshFailed)TextButton(vm::reconcileAll){Text("Retry selected range")}}
+        )
+    }
+    if(confirmHide)AlertDialog(onDismissRequest={confirmHide=false},title={Text("Checks are incomplete")},text={Text("Hide progress and continue in the background? This does not cancel the refresh.")},confirmButton={TextButton({confirmHide=false;vm.hideRefreshProgress()}){Text("Continue in background")}},dismissButton={TextButton({confirmHide=false}){Text("Keep viewing")}})
+}

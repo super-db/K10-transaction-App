@@ -9,7 +9,9 @@ import com.google.firebase.messaging.FirebaseMessaging
 import com.k10.smsbridge.Graph
 import com.k10.smsbridge.data.TransactionEntity
 import com.k10.smsbridge.mobile.*
-import com.k10.smsbridge.sync.ConfirmedSync
+import com.k10.smsbridge.sync.ManualRefreshWorker
+import com.k10.smsbridge.sync.ManualRefreshRange
+import androidx.work.*
 import android.os.SystemClock
 import com.k10.smsbridge.diagnostics.OpeningDiagnostics
 import com.k10.smsbridge.diagnostics.DiagnosticEventLog
@@ -45,6 +47,10 @@ class MobileViewModel(app:Application):AndroidViewModel(app){
     val pendingApprovals:Int get()=requests.size
     private val deviceId=Settings.Secure.getString(app.contentResolver,Settings.Secure.ANDROID_ID)?:"k10-unknown-device"
     var reconciliationProgress by mutableStateOf("");private set
+    var showRefreshProgress by mutableStateOf(false);private set
+    var refreshFailed by mutableStateOf(false);private set
+    private var manualRefreshId:java.util.UUID?=null
+    fun hideRefreshProgress(){showRefreshProgress=false}
     private var historyJob:Job?=null
     private var activeHistoryRange:String?=null
     private var refreshAfterHistory=false
@@ -54,6 +60,7 @@ class MobileViewModel(app:Application):AndroidViewModel(app){
     private var localObserver:Job? = null
 
     init{
+        observeManualRefresh()
         viewModelScope.launch(Dispatchers.IO){
             val started=SystemClock.elapsedRealtime()
             var repaired=0
@@ -69,7 +76,7 @@ class MobileViewModel(app:Application):AndroidViewModel(app){
                 }
             }.onFailure{DiagnosticEventLog.error("LOCAL_METADATA_REPAIR_FAILED","sms_parse",it::class.java.simpleName)}
             OpeningDiagnostics.stage("Local metadata repair",SystemClock.elapsedRealtime()-started,"$repaired corrected; IDs and sync state preserved")
-            if(repaired>0)DiagnosticEventLog.info("IMPS_METADATA_REPAIRED","sms_parse","$repaired local records corrected without re-upload")
+            if(repaired>0)DiagnosticEventLog.info("BANK_SMS_METADATA_REPAIRED","sms_parse","$repaired local records corrected without re-upload")
         }
         session?.let{if(!it.passwordChangeRequired){startLocalObserver(it);load("today",false);refreshPreferences(false);registerDevice(it);if(it.developer){refreshApprovals(false);loadExclusions(false);loadStudents(false)}}}
         viewModelScope.launch{Graph.transactionEvents.collect{if(session?.passwordChangeRequired==false){rebuildTransactions();load(range,false,true)}}}
@@ -107,25 +114,56 @@ class MobileViewModel(app:Application):AndroidViewModel(app){
     }
 
     fun refresh(){load(range,false)}
-    fun reconcileAll(){
-        if(reconcilingTransactions)return
+    private fun observeManualRefresh(){
         viewModelScope.launch{
-            reconcilingTransactions=true
-            reconciliationProgress="Preparing SMS scan and server check…"
-            clearMessage()
-            val feedback=runCatching{ConfirmedSync.run(getApplication(),scanFullHistory=true,recheckAll=true){checked,total->reconciliationProgress="Server check: $checked / $total transactions"}}
-                .fold(
-                    onSuccess={result->
-                        if(result.successful)success(result.userMessage()) else {message=result.userMessage();messageIsError=true}
-                        result.userMessage()
-                    },
-                    onFailure={error->failure(error,"Could not scan and sync transactions");message}
-                )
-            load(range,false)
-            reconcilingTransactions=false
-            reconciliationProgress=""
-            delay(2_000)
-            if(message==feedback)clearMessage()
+            WorkManager.getInstance(getApplication()).getWorkInfosForUniqueWorkFlow(ManualRefreshWorker.NAME).collect{infos->
+                if(session?.developer!=true)return@collect
+                val active=infos.firstOrNull{!it.state.isFinished}
+                val info=active?:infos.firstOrNull{it.id==manualRefreshId}?:return@collect
+                if(active!=null){
+                    if(manualRefreshId!=active.id){manualRefreshId=active.id;showRefreshProgress=true}
+                    reconcilingTransactions=true;refreshFailed=false
+                    val p=info.progress
+                    reconciliationProgress=p.getString("message")?:if(info.state==WorkInfo.State.ENQUEUED)"Waiting for network or Android scheduling…" else "Preparing refresh…"
+                    reconciliationProgress+="\nRange: "+p.getString("range").orEmpty()+" · SMS scanned: "+p.getInt("scanned",0)+" · Recovered: "+p.getInt("recovered",0)+"\nServer: "+p.getInt("checked",0)+" / "+p.getInt("total",0)+" · Present: "+p.getInt("present",0)+" · Uploaded: "+p.getInt("uploaded",0)+" · Failed: "+p.getInt("failed",0)
+                }else if(reconcilingTransactions){
+                    reconcilingTransactions=false
+                    refreshFailed=info.state!=WorkInfo.State.SUCCEEDED
+                    reconciliationProgress=info.outputData.getString("message")?:"Refresh stopped before completion. See diagnostics."
+                    load(range,false,true)
+                    if(!refreshFailed){
+                        val completedId=info.id
+                        viewModelScope.launch{delay(2_000);if(!reconcilingTransactions&&manualRefreshId==completedId)showRefreshProgress=false}
+                    }
+                }
+            }
+        }
+    }
+
+    fun reconcileAll(){
+        val current=session?:return
+        if(reconcilingTransactions){showRefreshProgress=true;return}
+        if(!current.developer){
+            // Staff have no inbox/bridge duties; retain their role-limited server history path.
+            load(range,true,true);return
+        }
+        val selected=ManualRefreshRange.create(range)
+        reconcilingTransactions=true;refreshFailed=false;showRefreshProgress=true
+        reconciliationProgress="Preparing "+selected.key+" refresh…";clearMessage()
+        viewModelScope.launch{
+            try{
+                val manager=WorkManager.getInstance(getApplication())
+                val existing=withContext(Dispatchers.IO){manager.getWorkInfosForUniqueWork(ManualRefreshWorker.NAME).get().firstOrNull{!it.state.isFinished}}
+                if(existing!=null){manualRefreshId=existing.id;return@launch}
+                val request=OneTimeWorkRequestBuilder<ManualRefreshWorker>()
+                    .setInputData(workDataOf("range" to selected.key,"from" to selected.from,"until" to selected.until))
+                    .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()).build()
+                manualRefreshId=request.id
+                withContext(Dispatchers.IO){manager.enqueueUniqueWork(ManualRefreshWorker.NAME,ExistingWorkPolicy.KEEP,request).result.get()}
+            }catch(error:Exception){
+                reconcilingTransactions=false;refreshFailed=true
+                reconciliationProgress="Refresh could not be queued: "+(error.message?:"REFRESH_ENQUEUE_FAILED")
+            }
         }
     }
     fun refreshApprovals(showMessage:Boolean=true){val current=session?.takeIf{it.developer}?:return;viewModelScope.launch{if(showMessage)busy=true;runCatching{MobileApi.approvalInbox(current)}.onSuccess{requests=it.requests;managedAccounts=it.accounts;if(showMessage)success("Approval inbox refreshed")}.onFailure{failure(it,"Could not load account requests")};busy=false}}

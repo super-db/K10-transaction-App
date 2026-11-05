@@ -99,6 +99,19 @@ object BackendClient {
         }
     }
 
+    data class Presence(val localId:String,val present:Boolean,val serverId:String?,val excluded:Boolean)
+    suspend fun presence(baseUrl:String,token:String,items:List<TransactionEntity>):List<Presence> = withContext(Dispatchers.IO){
+        val payload=JSONObject().put("items",org.json.JSONArray().apply{items.forEach{item->put(JSONObject().put("localId",item.uniqueLocalId).put("duplicateKey",item.duplicateKey).put("rawSms",item.rawEligibleSms.trim().take(1000)))}})
+        val (code,body)=request("$baseUrl/api/k10-pay/transaction-presence","POST",token,payload.toString())
+        val json=runCatching{JSONObject(body)}.getOrNull()
+        check(code in 200..299){"Presence check failed · HTTP "+code+" · "+json?.optString("code").orEmpty()+" · Ref "+json?.optString("trace_id").orEmpty()}
+        val rows=checkNotNull(json?.optJSONArray("items")){"PRESENCE_INVALID_RESPONSE"}
+        val parsed=(0 until rows.length()).map{index->val row=rows.getJSONObject(index);Presence(row.getString("localId"),row.getBoolean("present"),row.optString("transactionId").takeIf{it.isNotBlank()&&it!="null"},row.optBoolean("excluded"))}
+        check(parsed.map{it.localId}.toSet()==items.map{it.uniqueLocalId}.toSet()&&parsed.size==items.size){"PRESENCE_INCOMPLETE_RESPONSE"}
+        check(parsed.none{it.present&&it.serverId==null}){"PRESENCE_MISSING_SERVER_ID"}
+        parsed
+    }
+
     suspend fun test(baseUrl: String, token: String): Boolean = withContext(Dispatchers.IO) {
         health(baseUrl, token).healthy
     }
