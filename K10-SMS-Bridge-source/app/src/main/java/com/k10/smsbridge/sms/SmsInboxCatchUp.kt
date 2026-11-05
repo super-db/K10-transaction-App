@@ -24,7 +24,10 @@ object SmsInboxCatchUp {
         context: Context,
         rules: RuleConfig,
         dao: TransactionDao,
-        fullHistory: Boolean = false
+        fullHistory: Boolean = false,
+        rangeFrom: Long? = null,
+        rangeUntil: Long? = null,
+        onScanned: (Int) -> Unit = {}
     ): Int = withContext(Dispatchers.IO) {
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.READ_SMS) != PackageManager.PERMISSION_GRANTED) {
             return@withContext 0
@@ -33,21 +36,24 @@ object SmsInboxCatchUp {
         val now = System.currentTimeMillis()
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         val previous = prefs.getLong(LAST_SCAN, now - FIRST_SCAN_LOOKBACK_MILLIS)
-        val from = if (fullHistory) 0L else (previous - OVERLAP_MILLIS).coerceAtLeast(0L)
+        val from = rangeFrom ?: if (fullHistory) 0L else (previous - OVERLAP_MILLIS).coerceAtLeast(0L)
+        val until = rangeUntil ?: now
         var added = 0
+        var scanned = 0
 
         try {
             context.contentResolver.query(
                 Telephony.Sms.Inbox.CONTENT_URI,
                 arrayOf(Telephony.Sms.ADDRESS, Telephony.Sms.BODY, Telephony.Sms.DATE),
                 "${Telephony.Sms.DATE} >= ? AND ${Telephony.Sms.DATE} <= ?",
-                arrayOf(from.toString(), now.toString()),
+                arrayOf(from.toString(), until.toString()),
                 "${Telephony.Sms.DATE} ASC"
             )?.use { cursor ->
                 val senderIndex = cursor.getColumnIndexOrThrow(Telephony.Sms.ADDRESS)
                 val bodyIndex = cursor.getColumnIndexOrThrow(Telephony.Sms.BODY)
                 val dateIndex = cursor.getColumnIndexOrThrow(Telephony.Sms.DATE)
                 while (cursor.moveToNext()) {
+                    scanned++; if(scanned % 50 == 0)onScanned(scanned)
                     val parsed = SmsParser.parse(
                         cursor.getString(senderIndex).orEmpty(),
                         cursor.getString(bodyIndex).orEmpty(),
@@ -61,7 +67,8 @@ object SmsInboxCatchUp {
                     }
                 }
             }
-            prefs.edit().putLong(LAST_SCAN, now).apply()
+            if(rangeFrom==null)prefs.edit().putLong(LAST_SCAN, now).apply()
+            onScanned(scanned)
         } catch (_: SecurityException) {
             DiagnosticEventLog.error("SMS_INBOX_PERMISSION_DENIED", "sms_recovery", "Android denied SMS inbox access")
             return@withContext 0

@@ -88,11 +88,17 @@ object SmsParser {
         )
     }
 
+    /** Compatibility name retained for callers; supports structural UPI/IMPS/NEFT/RTGS metadata. */
     fun recoverImpsMetadata(body:String, expectedLast4:String="7972"):RecoveredSmsMetadata? {
         if(!hasExpectedDestinationAccount(body,expectedLast4) || !RuleValidator.hasImmutableCreditSignal(body) || RuleValidator.hasImmutableExclusion(body))return null
-        val clean=body.replace(Regex("\\s+")," ").trim()
-        val match=Regex("\\bfrom\\s+([\\p{L}][\\p{L}\\p{N} .'’&/\\-]{0,159}?)\\s*\\(\\s*IMPS\\s+Ref\\s*:\\s*[a-z0-9-]{6,}\\s*\\)",RegexOption.IGNORE_CASE).find(clean) ?: return null
-        return RecoveredSmsMetadata(match.groupValues[1].trim(),"IMPS")
+        val clean=java.text.Normalizer.normalize(body,java.text.Normalizer.Form.NFKC).replace(Regex("\\s+")," ").trim()
+        val match=Regex("\\bfrom\\s+([\\p{L}][\\p{L}\\p{N} .'’&/\\-]{0,159}?)\\s*(?=\\(\\s*(?:(?:UPI|IMPS|NEFT|RTGS)\\s+)?(?:Ref(?:erence)?(?:\\s*(?:ID|No\\.?))?|UTR)\\s*[:.#-]|\\bvia\\s+(?:UPI|IMPS|NEFT|RTGS)\\b)",RegexOption.IGNORE_CASE).find(clean) ?: return null
+        val name=match.groupValues[1].trim().trimEnd('.')
+        // A source account reference is not a payer name.
+        if(Regex("\\b(?:a/c|account|acct|ref|balance)\\b",RegexOption.IGNORE_CASE).containsMatchIn(name)||name.none{it.isLetter()})return null
+        val tail=clean.substring(match.range.last+1)
+        val method=Regex("(?:^\\(\\s*|^via\\s+)(UPI|IMPS|NEFT|RTGS)\\b",RegexOption.IGNORE_CASE).find(tail)?.groupValues?.get(1)?.uppercase(Locale.ENGLISH) ?: "UNKNOWN"
+        return RecoveredSmsMetadata(name,method)
     }
 
     fun isFinanciallyScopedCandidate(sender: String, body: String, rules: RuleConfig): Boolean =
