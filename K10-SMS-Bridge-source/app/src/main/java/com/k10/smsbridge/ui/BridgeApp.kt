@@ -3,6 +3,7 @@ package com.k10.smsbridge.ui
 import android.Manifest
 import android.content.ClipData
 import android.content.ClipboardManager
+import android.content.Intent
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
@@ -11,6 +12,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.animateContentSize
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -113,6 +115,8 @@ private fun SystemDiagnosticsScreen(vm: BridgeViewModel, back: () -> Unit) {
     val localLogs by vm.localDiagnosticLogs.collectAsState(initial = emptyList())
     var showConfiguration by remember { mutableStateOf(false) }
     var showLogs by remember { mutableStateOf(false) }
+    var logSection by remember { mutableStateOf("All") }
+    val openingReport = com.k10.smsbridge.diagnostics.OpeningDiagnostics.report(context)
     val saved = remember { vm.settings() }
     var url by remember { mutableStateOf(saved.backendUrl) }
     var token by remember { mutableStateOf(vm.token()) }
@@ -123,6 +127,12 @@ private fun SystemDiagnosticsScreen(vm: BridgeViewModel, back: () -> Unit) {
 
     Header("System diagnostics", back)
     Text("Checks the complete path from SMS capture to server storage and staff notifications. No test transaction is added to the account list.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+    Card(Modifier.fillMaxWidth().padding(top=12.dp)) {
+        Column(Modifier.padding(14.dp)) {
+            Text("Last app opening",fontWeight=FontWeight.Bold)
+            Text(openingReport,style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
     Spacer(Modifier.height(12.dp))
     Button(onClick = vm::runFullDiagnostics, enabled = !vm.isRunningDiagnostics, modifier = Modifier.fillMaxWidth()) {
         Text(if (vm.isRunningDiagnostics) "Running full diagnostic…" else "Run full diagnostic")
@@ -148,23 +158,40 @@ private fun SystemDiagnosticsScreen(vm: BridgeViewModel, back: () -> Unit) {
         }
         (local + server).sortedByDescending { it.timestamp }.take(100)
     }
-    HorizontalDivider(Modifier.padding(top = 14.dp, bottom = 10.dp))
-    OutlinedButton(onClick = { showLogs = !showLogs }, modifier = Modifier.fillMaxWidth()) {
-        Text(if (showLogs) "Hide diagnostic log report" else "Diagnostic log report (${renderedLogs.size})")
+    val completeReport = buildString {
+        appendLine("K10 Pay diagnostic report")
+        appendLine(openingReport)
+        appendLine("System checks · ${formatTimestamp(vm.diagnosticsRunAt)}")
+        vm.diagnosticChecks.forEach { appendLine("${it.title}: ${it.status} [${it.code}] ${it.detail}${it.suggestion?.let{hint->" · Suggested: $hint"}.orEmpty()}") }
+        for(section in com.k10.smsbridge.diagnostics.DiagnosticSections.names.drop(1)+"Other") {
+            appendLine("\n--- $section ---")
+            renderedLogs.asReversed().filter{com.k10.smsbridge.diagnostics.DiagnosticSections.category(it.stage)==section}.forEach { log ->
+                appendLine("${formatTimestamp(log.timestamp)} ${log.source} ${log.level} ${log.code} ${log.message}${log.referenceId?.let{" ref=$it"}.orEmpty()}")
+            }
+        }
     }
-    if (showLogs) {
-        Text("Timestamped phone and server events. Raw SMS text and secret tokens are never included.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 8.dp))
-        OutlinedButton(
-            onClick = {
-                val report = renderedLogs.asReversed().joinToString("\n") { log ->
-                    "${formatTimestamp(log.timestamp)} ${log.source} ${log.level} ${log.code} [${log.stage}] ${log.message}${log.referenceId?.let { " ref=$it" }.orEmpty()}"
-                }
-                (context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("K10 Pay diagnostic log", report))
-            },
-            enabled = renderedLogs.isNotEmpty(),
-            modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
-        ) { Text("Copy log report") }
-        renderedLogs.forEach { log -> DiagnosticLogRow(log) }
+    HorizontalDivider(Modifier.padding(top=14.dp,bottom=10.dp))
+    Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(8.dp)) {
+        OutlinedButton(onClick={
+            (context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager).setPrimaryClip(ClipData.newPlainText("K10 Pay diagnostics",completeReport))
+        },modifier=Modifier.weight(1f)){Text("Copy report")}
+        OutlinedButton(onClick={
+            context.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply{type="text/plain";putExtra(Intent.EXTRA_TEXT,completeReport)},"Share K10 Pay report"))
+        },modifier=Modifier.weight(1f)){Text("Share report")}
+    }
+    OutlinedButton(onClick={showLogs=!showLogs},modifier=Modifier.fillMaxWidth()){
+        Text(if(showLogs)"Hide event details" else "Event details (${renderedLogs.size})")
+    }
+    if(showLogs){
+        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),horizontalArrangement=Arrangement.spacedBy(6.dp)){
+            com.k10.smsbridge.diagnostics.DiagnosticSections.names.forEach { section ->
+                TextButton(onClick={logSection=section}){Text(if(logSection==section)"• $section" else section)}
+            }
+        }
+        val filtered=renderedLogs.filter{logSection=="All"||com.k10.smsbridge.diagnostics.DiagnosticSections.category(it.stage)==logSection}
+        Text("${filtered.size} events · raw SMS and secret tokens excluded",style=MaterialTheme.typography.bodySmall)
+        filtered.forEach { DiagnosticLogRow(it) }
+        if(filtered.isEmpty())Text("No recorded events in this section.",Modifier.padding(vertical=12.dp))
     }
 
     HorizontalDivider(Modifier.padding(vertical = 14.dp))
@@ -232,7 +259,7 @@ private fun DiagnosticCard(check: SystemDiagnostic) {
                 Text(check.status.replace('_', ' ').uppercase(), color = color, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
             }
             if (expandable && !expanded) {
-                Text("Tap to view registered, inactive and Developer bridge devices", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 4.dp))
+                Text("${check.detail} · Tap for details", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 4.dp))
             } else {
                 Text(check.detail, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 4.dp))
                 Text("Diagnostic code: ${check.code}", color = color, style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 5.dp))
@@ -616,3 +643,4 @@ private fun statusText(status: String): String = when (status) {
     "REJECTED" -> "Rejected"
     else -> "Failed upload"
 }
+

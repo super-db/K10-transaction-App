@@ -78,6 +78,8 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
             },
             transactionLocalId
         )
+        if(interactive)runCatching { setProgress(Data.Builder().putInt("checked",0).putInt("total",pending.size).build()) }
+        var checked=0
         pending.forEach { item ->
             val outcome = TransactionSyncCoordinator.uploadOne(item)
             when (outcome.status) {
@@ -91,6 +93,8 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
                     else -> unexpectedFailures++
                 }
             }
+            checked++
+            if(interactive)runCatching { setProgress(Data.Builder().putInt("checked",checked).putInt("total",pending.size).build()) }
         }
         val output = Data.Builder()
             .putInt(OUTPUT_SCANNED, scanned)
@@ -144,3 +148,4 @@ class SyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(c
         const val OUTPUT_ERROR = "error"
     }
 }
+

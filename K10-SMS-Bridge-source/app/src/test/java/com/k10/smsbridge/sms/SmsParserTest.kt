@@ -111,7 +111,28 @@ class SmsParserTest {
         assertEquals(first?.duplicateKey, second?.duplicateKey)
     }
 
+    @Test fun suppliedImpsMessagesExtractNamesAndMethodsWithoutChangingLegacyKeys() {
+        val cases=listOf(
+            Pair("Rs. 2,500 received in a/c xx7972 on 04-Nov-26 from DEVASISH BHAGAWATI (IMPS Ref: 213261923086) - slice","DEVASISH BHAGAWATI"),
+            Pair("Rs. 3,000 received in a/c xx7972 on 03-Nov-26 from LUHIT MIRI (IMPS Ref: 630781500718) - slice","LUHIT MIRI")
+        )
+        for((body,name) in cases){
+            val tx=requireNotNull(SmsParser.parse("JD-SLCBNK-T",body,receivedAt,RuleConfig.DEFAULT).transaction)
+            assertEquals(name,tx.payerName);assertEquals("IMPS",tx.paymentMethod)
+            val canonical=listOf("JD-SLCBNK-T",tx.amountMinor,"Unknown payer".uppercase(),tx.accountLast4,tx.transactionDate,body.trim()).joinToString("|")
+            val oldKey=java.security.MessageDigest.getInstance("SHA-256").digest(canonical.toByteArray()).joinToString(""){"%02x".format(it)}
+            assertEquals("Metadata correction must not create a second payment on rescan",oldKey,tx.duplicateKey)
+        }
+    }
+    @Test fun impsNamesCanWrapAndCannotUseTheSendingAccount() {
+        val wrapped="Rs. 3000 received in a/c xx7972 from LUHIT\nMIRI (IMPS Ref: 630781500718) - slice"
+        assertEquals("LUHIT MIRI",SmsParser.recoverImpsMetadata(wrapped)?.payerName)
+        assertEquals(null,SmsParser.recoverImpsMetadata("Rs. 400 received in a/c 5778 from A/c 7972 (IMPS Ref: 12345678) - slice"))
+        assertEquals(null,SmsParser.recoverImpsMetadata(wrapped+" OTP 123456"))
+    }
+
     private fun assertRejected(body: String) {
         assertFalse(SmsParser.parse("SLICE", body, receivedAt, RuleConfig.DEFAULT).eligible)
     }
 }
+

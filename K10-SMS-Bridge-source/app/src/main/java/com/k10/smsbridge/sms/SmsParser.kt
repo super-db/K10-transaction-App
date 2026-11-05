@@ -31,6 +31,8 @@ data class ParseResult(val transaction: ParsedSms?, val reason: String) {
     val eligible: Boolean get() = transaction != null
 }
 
+data class RecoveredSmsMetadata(val payerName:String,val paymentMethod:String)
+
 object SmsParser {
     private val creditSignal = Regex("\\b(received|credited|deposited)\\b", RegexOption.IGNORE_CASE)
     private val accountReference = Regex(
@@ -56,15 +58,19 @@ object SmsParser {
             BigDecimal(amountText.replace(",", "")).movePointRight(2).setScale(0, RoundingMode.UNNECESSARY).longValueExact()
         }.getOrNull()?.takeIf { it > 0 } ?: return ParseResult(null, "Amount is invalid")
 
-        val payer = captureFromTemplates(body, rules.payerPatterns, "{payer}", "[\\p{L}][\\p{L} .'-]{0,79}")
-            ?.trim()?.trimEnd('.') ?: "Unknown payer"
+        val legacyPayer = captureFromTemplates(body, rules.payerPatterns, "{payer}", "[\\p{L}][\\p{L} .'-]{0,79}")
+            ?.trim()?.trimEnd('.')
+        val recovered = recoverImpsMetadata(body, rules.accountLast4)
+        val payer = legacyPayer ?: recovered?.payerName ?: "Unknown payer"
         val payerExcluded = rules.excludedPayerNames.any { normalizePayer(it) == normalizePayer(payer) }
         val dateText = captureFromTemplates(body, rules.datePatterns, "{date}", "[0-9]{1,2}(?:[ ./-][A-Za-z]{3,9}|[./-][0-9]{1,2})(?:[ ./-][0-9]{2,4})?")
         val transactionDate = dateText?.let { parseDate(it, receivedAt) }
             ?: Instant.ofEpochMilli(receivedAt).atZone(ZoneId.systemDefault()).toLocalDate()
         val method = captureFromTemplates(body, rules.paymentMethodPatterns, "{payment_method}", "[A-Za-z][A-Za-z0-9 -]{1,30}")
-            ?.trim()?.trimEnd('.')?.uppercase() ?: "UNKNOWN"
-        val key = duplicateKey(normalizedSender, amountMinor, payer, rules.accountLast4, transactionDate, body)
+            ?.trim()?.trimEnd('.')?.uppercase() ?: recovered?.paymentMethod ?: "UNKNOWN"
+        // Keep the legacy identity input. Improving metadata must not create a
+        // second local payment when an already-imported IMPS SMS is rescanned.
+        val key = duplicateKey(normalizedSender, amountMinor, legacyPayer ?: "Unknown payer", rules.accountLast4, transactionDate, body)
         return ParseResult(
             ParsedSms(
                 duplicateKey = key,
@@ -80,6 +86,13 @@ object SmsParser {
             ),
             if (payerExcluded) "Eligible transaction from an excluded payer" else "Eligible"
         )
+    }
+
+    fun recoverImpsMetadata(body:String, expectedLast4:String="7972"):RecoveredSmsMetadata? {
+        if(!hasExpectedDestinationAccount(body,expectedLast4) || !RuleValidator.hasImmutableCreditSignal(body) || RuleValidator.hasImmutableExclusion(body))return null
+        val clean=body.replace(Regex("\\s+")," ").trim()
+        val match=Regex("\\bfrom\\s+([\\p{L}][\\p{L}\\p{N} .'’&/\\-]{0,159}?)\\s*\\(\\s*IMPS\\s+Ref\\s*:\\s*[a-z0-9-]{6,}\\s*\\)",RegexOption.IGNORE_CASE).find(clean) ?: return null
+        return RecoveredSmsMetadata(match.groupValues[1].trim(),"IMPS")
     }
 
     fun isFinanciallyScopedCandidate(sender: String, body: String, rules: RuleConfig): Boolean =
@@ -166,3 +179,4 @@ object SmsParser {
         return MessageDigest.getInstance("SHA-256").digest(canonical.toByteArray()).joinToString("") { "%02x".format(it) }
     }
 }
+

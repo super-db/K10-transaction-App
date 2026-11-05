@@ -96,6 +96,9 @@ interface TransactionDao {
     @Query("SELECT * FROM transactions ORDER BY smsReceivedTimestamp DESC")
     suspend fun snapshot(): List<TransactionEntity>
 
+    @Query("UPDATE transactions SET payerName=:payer, paymentMethod=:method WHERE uniqueLocalId=:id AND payerName=:previousPayer AND paymentMethod=:previousMethod")
+    suspend fun repairMetadata(id:String,payer:String,method:String,previousPayer:String,previousMethod:String)
+
     @Query("SELECT COUNT(*) FROM transactions WHERE syncStatus = :status")
     fun observeCount(status: String): Flow<Int>
 
@@ -145,3 +148,4 @@ abstract class AppDatabase : RoomDatabase() {
         ).addMigrations(MIGRATION_1_2, MIGRATION_2_3).build()
     }
 }
+
