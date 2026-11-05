@@ -43,12 +43,16 @@ object ConfirmedSync {
             .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
             .build()
         val workManager = WorkManager.getInstance(context)
-        workManager.enqueueUniqueWork(SyncWorker.USER_SYNC_NAME, ExistingWorkPolicy.REPLACE, request)
+        // If the UI stopped waiting earlier, attach to the same durable work.
+        // A second tap must not cancel an upload that is still running.
+        val existing=withContext(Dispatchers.IO){workManager.getWorkInfosForUniqueWork(SyncWorker.USER_SYNC_NAME).get().firstOrNull{!it.state.isFinished}}
+        val workId=existing?.id?:request.id
+        if(existing==null)workManager.enqueueUniqueWork(SyncWorker.USER_SYNC_NAME, ExistingWorkPolicy.REPLACE, request)
         var info: WorkInfo? = null
         var lastProgress=Pair(-1,-1)
         val finished=withTimeoutOrNull(120_000L){
         while (info?.state?.isFinished != true) {
-            info = withContext(Dispatchers.IO) { workManager.getWorkInfoById(request.id).get() }
+            info = withContext(Dispatchers.IO) { workManager.getWorkInfoById(workId).get() }
             info?.let { current ->
                 val progress=Pair(current.progress.getInt("checked",0),current.progress.getInt("total",0))
                 if(progress!=lastProgress){lastProgress=progress;onProgress(progress.first,progress.second)}
