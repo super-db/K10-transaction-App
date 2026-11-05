@@ -10,6 +10,12 @@ import com.k10.smsbridge.Graph
 import com.k10.smsbridge.data.TransactionEntity
 import com.k10.smsbridge.mobile.*
 import com.k10.smsbridge.sync.ConfirmedSync
+import android.os.SystemClock
+import com.k10.smsbridge.diagnostics.OpeningDiagnostics
+import com.k10.smsbridge.diagnostics.DiagnosticEventLog
+import com.k10.smsbridge.sms.SmsParser
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -38,14 +44,35 @@ class MobileViewModel(app:Application):AndroidViewModel(app){
     var availableUpdate:AppUpdateInfo? by mutableStateOf(null);private set
     val pendingApprovals:Int get()=requests.size
     private val deviceId=Settings.Secure.getString(app.contentResolver,Settings.Secure.ANDROID_ID)?:"k10-unknown-device"
+    var reconciliationProgress by mutableStateOf("");private set
+    private var historyJob:Job?=null
+    private var activeHistoryRange:String?=null
+    private var refreshAfterHistory=false
     private var loadSequence=0L
     private var cloudTransactions:List<MobileTransaction> = emptyList()
     private var localTransactions:List<TransactionEntity> = emptyList()
     private var localObserver:Job? = null
 
     init{
+        viewModelScope.launch(Dispatchers.IO){
+            val started=SystemClock.elapsedRealtime()
+            var repaired=0
+            runCatching {
+                val dao=Graph.database.transactions()
+                dao.snapshot().forEach{row->
+                    if(row.payerName.equals("Unknown payer",true)||row.paymentMethod.equals("UNKNOWN",true)){
+                        val recovered=SmsParser.recoverImpsMetadata(row.rawEligibleSms,row.accountLast4)?:return@forEach
+                        val name=if(row.payerName.equals("Unknown payer",true))recovered.payerName else row.payerName
+                        val method=if(row.paymentMethod.equals("UNKNOWN",true))recovered.paymentMethod else row.paymentMethod
+                        dao.repairMetadata(row.uniqueLocalId,name,method,row.payerName,row.paymentMethod);repaired++
+                    }
+                }
+            }.onFailure{DiagnosticEventLog.error("LOCAL_METADATA_REPAIR_FAILED","sms_parse",it::class.java.simpleName)}
+            OpeningDiagnostics.stage("Local metadata repair",SystemClock.elapsedRealtime()-started,"$repaired corrected; IDs and sync state preserved")
+            if(repaired>0)DiagnosticEventLog.info("IMPS_METADATA_REPAIRED","sms_parse","$repaired local records corrected without re-upload")
+        }
         session?.let{if(!it.passwordChangeRequired){startLocalObserver(it);load("today",false);refreshPreferences(false);registerDevice(it);if(it.developer){refreshApprovals(false);loadExclusions(false);loadStudents(false)}}}
-        viewModelScope.launch{Graph.transactionEvents.collect{if(session?.passwordChangeRequired==false){rebuildTransactions();load(range,false)}}}
+        viewModelScope.launch{Graph.transactionEvents.collect{if(session?.passwordChangeRequired==false){rebuildTransactions();load(range,false,true)}}}
         checkForUpdate(false)
     }
 
@@ -58,14 +85,35 @@ class MobileViewModel(app:Application):AndroidViewModel(app){
     fun requestReset(email:String,onSent:()->Unit={}){if(busy)return;viewModelScope.launch{busy=true;clearMessage();runCatching{MobileApi.requestReset(email.trim())}.onSuccess{success(it);onSent()}.onFailure{failure(it,"Reset email could not be sent")};busy=false}}
     fun completeReset(email:String,code:String,password:String,onDone:()->Unit){if(busy)return;viewModelScope.launch{busy=true;clearMessage();runCatching{MobileApi.completeReset(email.trim(),code.trim(),password)}.onSuccess{success(it);onDone()}.onFailure{failure(it,"Password reset failed")};busy=false}}
     fun changePassword(current:String,next:String,onDone:()->Unit){val active=session?:return;if(busy)return;viewModelScope.launch{busy=true;clearMessage();runCatching{MobileApi.changePassword(active,current,next)}.onSuccess{logout(false);success(it);onDone()}.onFailure{failure(it,"Password change failed")};busy=false}}
-    fun load(value:String,showMessage:Boolean=true){val current=session?:return;if(current.passwordChangeRequired)return;range=value;rebuildTransactions();val requestId=++loadSequence;viewModelScope.launch{loadingTransactions=true;if(showMessage)clearMessage();runCatching{MobileApi.transactions(current,value)}.onSuccess{page->if(requestId==loadSequence){cloudTransactions=page.transactions;rebuildTransactions(page.todayAmount,page.todayCount)}}.onFailure{if(requestId==loadSequence){rebuildTransactions();failure(it,"Could not load server transactions. Local transactions are still shown.")}};if(requestId==loadSequence)loadingTransactions=false}}
+    fun load(value:String,showMessage:Boolean=true,ensureFresh:Boolean=false){
+        val current=session?:return;if(current.passwordChangeRequired)return
+        range=value;rebuildTransactions()
+        if(historyJob?.isActive==true&&activeHistoryRange==value){refreshAfterHistory=refreshAfterHistory||ensureFresh;return}
+        val requestId=++loadSequence;activeHistoryRange=value
+        historyJob=viewModelScope.launch{
+            val started=SystemClock.elapsedRealtime();loadingTransactions=true;if(showMessage)clearMessage()
+            DiagnosticEventLog.info("HISTORY_REQUEST_STARTED","startup","Server history requested · $value · request $requestId")
+            var historySucceeded=false
+            runCatching{MobileApi.transactions(current,value)}
+                .onSuccess{page->historySucceeded=true;if(requestId==loadSequence){cloudTransactions=page.transactions;rebuildTransactions(page.todayAmount,page.todayCount)}}
+                .onFailure{if(requestId==loadSequence){rebuildTransactions();failure(it,"Could not load server transactions. Local transactions are still shown.")};DiagnosticEventLog.error("HISTORY_REQUEST_FAILED","startup","History request failed · ${it::class.java.simpleName}")}
+            val elapsed=SystemClock.elapsedRealtime()-started
+            OpeningDiagnostics.stage("Server history",elapsed,if(historySucceeded)"completed" else "request failed; local history retained")
+            DiagnosticEventLog.info("HISTORY_REQUEST_COMPLETED","startup","Server history took $elapsed ms · request $requestId")
+            if(requestId==loadSequence){loadingTransactions=false;activeHistoryRange=null;historyJob=null
+                if(refreshAfterHistory){refreshAfterHistory=false;load(range,false)}
+            }
+        }
+    }
+
     fun refresh(){load(range,false)}
     fun reconcileAll(){
         if(reconcilingTransactions)return
         viewModelScope.launch{
             reconcilingTransactions=true
+            reconciliationProgress="Preparing SMS scan and server check…"
             clearMessage()
-            val feedback=runCatching{ConfirmedSync.run(getApplication(),scanFullHistory=true,recheckAll=true)}
+            val feedback=runCatching{ConfirmedSync.run(getApplication(),scanFullHistory=true,recheckAll=true){checked,total->reconciliationProgress="Server check: $checked / $total transactions"}}
                 .fold(
                     onSuccess={result->
                         if(result.successful)success(result.userMessage()) else {message=result.userMessage();messageIsError=true}
@@ -75,6 +123,7 @@ class MobileViewModel(app:Application):AndroidViewModel(app){
                 )
             load(range,false)
             reconcilingTransactions=false
+            reconciliationProgress=""
             delay(2_000)
             if(message==feedback)clearMessage()
         }
@@ -94,7 +143,7 @@ class MobileViewModel(app:Application):AndroidViewModel(app){
     fun savePreferences(value:NotificationPreferences){val current=session?:return;if(busy)return;viewModelScope.launch{busy=true;clearMessage();runCatching{MobileApi.savePreferences(current,value)}.onSuccess{saved->val updated=current.copy(notificationPreferences=saved);Graph.mobileSession.save(updated);session=updated;success("Notification settings saved")}.onFailure{failure(it,"Could not save notification settings")};busy=false}}
     fun checkForUpdate(showMessage:Boolean=true){viewModelScope.launch{runCatching{MobileApi.appVersion()}.onSuccess{availableUpdate=it.takeIf{info->info.latestVersionCode>com.k10.smsbridge.BuildConfig.VERSION_CODE};if(showMessage)success(if(availableUpdate==null)"K10 Pay is up to date" else "K10 Pay ${it.latestVersionName} is available")}.onFailure{if(showMessage)failure(it,"Could not check for updates")}}}
     fun downloadUpdate(){val info=availableUpdate?:return;if(busy)return;viewModelScope.launch{busy=true;clearMessage();runCatching{AppUpdater.download(getApplication(),info)}.onSuccess{apk->if(AppUpdater.install(getApplication(),apk))success("Update downloaded. Confirm installation to continue.")else success("Allow K10 Pay to install updates, then tap Update again.")}.onFailure{failure(it,"Could not download the update")};busy=false}}
-    fun logout(unregister:Boolean=true){val current=session;localObserver?.cancel();localObserver=null;session=null;cloudTransactions=emptyList();localTransactions=emptyList();transactions=emptyList();excludedTransactions=emptyList();students=emptyList();requests=emptyList();managedAccounts=emptyList();Graph.mobileSession.clear();if(unregister&&current!=null)viewModelScope.launch{runCatching{MobileApi.unregister(current,deviceId)}}}
+    fun logout(unregister:Boolean=true){val current=session;loadSequence++;historyJob?.cancel();historyJob=null;activeHistoryRange=null;refreshAfterHistory=false;localObserver?.cancel();localObserver=null;session=null;cloudTransactions=emptyList();localTransactions=emptyList();transactions=emptyList();excludedTransactions=emptyList();students=emptyList();requests=emptyList();managedAccounts=emptyList();Graph.mobileSession.clear();if(unregister&&current!=null)viewModelScope.launch{runCatching{MobileApi.unregister(current,deviceId)}}}
     private fun registerDevice(current:MobileSession){
         FirebaseMessaging.getInstance().token
             .addOnSuccessListener{token->viewModelScope.launch{
@@ -108,12 +157,15 @@ class MobileViewModel(app:Application):AndroidViewModel(app){
     private fun startLocalObserver(current:MobileSession){
         localObserver?.cancel()
         if(!current.developer){localTransactions=emptyList();rebuildTransactions();return}
+        val started=SystemClock.elapsedRealtime()
         localObserver=viewModelScope.launch{
-            Graph.database.transactions().observeAll().collect{rows->localTransactions=rows;rebuildTransactions()}
+            Graph.database.transactions().observeAll().collect{rows->localTransactions=rows;OpeningDiagnostics.stage("Local history",SystemClock.elapsedRealtime()-started,"${rows.size} local records");rebuildTransactions()}
         }
     }
 
     private fun rebuildTransactions(serverTodayAmount:Double?=null,serverTodayCount:Int?=null){
+        val renderStarted=SystemClock.elapsedRealtime()
+        try {
         val current=session?:return
         if(!current.developer){
             transactions=cloudTransactions
@@ -145,6 +197,7 @@ class MobileViewModel(app:Application):AndroidViewModel(app){
         val todayMerged=mergeForSummary(cloudTransactions,localVisible.filter{it.smsReceivedTimestamp>=start})
         todayAmount=todayMerged.sumOf{it.amount?:0.0}
         todayCount=todayMerged.size
+        } finally { OpeningDiagnostics.stage("Display merge",SystemClock.elapsedRealtime()-renderStarted,"slowest local/server merge",maximum=true) }
     }
 
     private fun mergeForSummary(cloud:List<MobileTransaction>,local:List<TransactionEntity>):List<MobileTransaction>{
@@ -190,3 +243,4 @@ class MobileViewModel(app:Application):AndroidViewModel(app){
     private fun parseInstant(value:String)=runCatching{Instant.parse(value).toEpochMilli()}.getOrDefault(0L)
     private fun normalizePayer(value:String)=value.trim().lowercase().replace(Regex("[^a-z0-9]+")," ").trim()
 }
+

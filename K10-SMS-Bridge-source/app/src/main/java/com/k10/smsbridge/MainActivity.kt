@@ -21,6 +21,7 @@ import com.k10.smsbridge.sync.SyncWorker
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        com.k10.smsbridge.diagnostics.OpeningDiagnostics.start(this)
         WindowCompat.setDecorFitsSystemWindows(window, false)
         setContent {
             val prefs = remember { getSharedPreferences("k10_pay_appearance", MODE_PRIVATE) }
@@ -35,6 +36,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        com.k10.smsbridge.diagnostics.OpeningDiagnostics.start(this)
         val request = OneTimeWorkRequestBuilder<SyncWorker>()
             .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
             .build()
@@ -69,3 +71,4 @@ private fun SmoothK10Theme(dark:Boolean, content:@Composable ()->Unit){
         surfaceVariant=animated(target.surfaceVariant),onSurfaceVariant=animated(target.onSurfaceVariant)
     ),content=content)
 }
+

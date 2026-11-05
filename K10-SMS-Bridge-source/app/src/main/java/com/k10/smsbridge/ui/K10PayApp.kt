@@ -134,6 +134,7 @@ private fun MobileHome(vm:MobileViewModel,openApprovals:()->Unit,openSettings:()
                 item{AnimatedSummaryCard(vm.todayAmount,vm.todayCount)}
                 item{Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(6.dp)){Range("Today",true,vm.range=="today",Modifier.weight(1f)){vm.load("today")};Range("15d",session.has("finance.slice.history15"),vm.range=="15d",Modifier.weight(1f)){vm.load("15d")};Range("30d",session.has("finance.slice.history30"),vm.range=="30d",Modifier.weight(1f)){vm.load("30d")};Range("All",session.has("finance.slice.historyLifetime"),vm.range=="all",Modifier.weight(1f)){vm.load("all")}}}
                 item{Text("Recent transactions",style=MaterialTheme.typography.titleLarge,fontWeight=FontWeight.Bold)}
+                if(vm.reconcilingTransactions)item{Text(vm.reconciliationProgress,style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.primary)}
                 if(vm.message.isNotBlank())item{Message(vm)}
                 if(!vm.loadingTransactions&&vm.transactions.isEmpty())item{Text("No transactions in this range.",color=MaterialTheme.colorScheme.onSurfaceVariant,modifier=Modifier.padding(vertical=24.dp))}
                 items(vm.transactions,key={it.id}){tx->
@@ -397,3 +398,4 @@ private fun maskAvailableBalance(value:String)=value
 private fun roleName(value:String)=when(value){"developer"->"Developer";"transaction_supervisor"->"Transaction Supervisor";else->"Transaction Viewer"}
 private fun historyName(value:String)=when(value){"15d"->"Up to 15 days";"30d"->"Up to 30 days";"lifetime"->"Lifetime";else->"Today only"}
 private fun rangeName(value:String)=when(value){"15d"->"last 15 days";"30d"->"last 30 days";"all"->"lifetime";else->"today"}
+

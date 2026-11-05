@@ -10,6 +10,7 @@ import androidx.work.WorkManager
 import androidx.work.workDataOf
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.withContext
 
 data class ConfirmedSyncResult(
@@ -32,7 +33,7 @@ data class ConfirmedSyncResult(
 }
 
 object ConfirmedSync {
-    suspend fun run(context: Context, scanFullHistory: Boolean, recheckAll: Boolean): ConfirmedSyncResult {
+    suspend fun run(context: Context, scanFullHistory: Boolean, recheckAll: Boolean, onProgress:(Int,Int)->Unit={_,_->}): ConfirmedSyncResult {
         val request = OneTimeWorkRequestBuilder<SyncWorker>()
             .setInputData(workDataOf(
                 SyncWorker.KEY_INTERACTIVE to true,
@@ -42,13 +43,26 @@ object ConfirmedSync {
             .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
             .build()
         val workManager = WorkManager.getInstance(context)
-        workManager.enqueueUniqueWork(SyncWorker.USER_SYNC_NAME, ExistingWorkPolicy.REPLACE, request)
+        // If the UI stopped waiting earlier, attach to the same durable work.
+        // A second tap must not cancel an upload that is still running.
+        val existing=withContext(Dispatchers.IO){workManager.getWorkInfosForUniqueWork(SyncWorker.USER_SYNC_NAME).get().firstOrNull{!it.state.isFinished}}
+        val workId=existing?.id?:request.id
+        if(existing==null)workManager.enqueueUniqueWork(SyncWorker.USER_SYNC_NAME, ExistingWorkPolicy.REPLACE, request)
         var info: WorkInfo? = null
+        var lastProgress=Pair(-1,-1)
+        val finished=withTimeoutOrNull(120_000L){
         while (info?.state?.isFinished != true) {
-            info = withContext(Dispatchers.IO) { workManager.getWorkInfoById(request.id).get() }
+            info = withContext(Dispatchers.IO) { workManager.getWorkInfoById(workId).get() }
+            info?.let { current ->
+                val progress=Pair(current.progress.getInt("checked",0),current.progress.getInt("total",0))
+                if(progress!=lastProgress){lastProgress=progress;onProgress(progress.first,progress.second)}
+            }
             if (info?.state?.isFinished == true) break
             delay(150)
         }
+        true
+        }
+        if(finished==null)return ConfirmedSyncResult(false,0,0,0,0,0,0,0,"Sync is continuing in the background. Open diagnostics for progress; you can keep using the app.")
         val completed = checkNotNull(info) { "Sync work disappeared before completion" }
         val data = completed.outputData
         return ConfirmedSyncResult(
@@ -64,3 +78,4 @@ object ConfirmedSync {
         )
     }
 }
+
